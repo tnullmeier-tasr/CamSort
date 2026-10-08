@@ -410,18 +410,22 @@ final class Sorter: ObservableObject {
             return known(n, "Video-Metadaten")
         }
 
-        // DJI: Kennung aus der Datei – trennt z. B. Action und Mini
+        // DJI: stabile Signatur – Kürzel am Dateinamen-Ende (z. B. _M3P), sonst Kamera-Code FCxxxx
         let hasSRT = siblings.contains(stem + ".SRT") || siblings.contains(stem + ".srt")
-        if let token = Self.djiToken(bytes) {
-            let sig = "dji:" + token + (hasSRT ? "+srt" : "")
-            return Detection(name: nil, signature: sig, label: "DJI-Kennung „\(token)“" + (hasSRT ? " mit SRT-Datei" : ""),
-                             hint: "DJI-Kamera mit Kennung „\(token)“" + (hasSRT ? " (mit Flugdaten/SRT – vermutlich Drohne)" : "") + ". Welches Modell ist das?")
-        }
-        if name.uppercased().hasPrefix("DJI_") {
-            let sig = "dji:name" + (hasSRT ? "+srt" : "")
-            return Detection(name: nil, signature: sig, label: "DJI-Dateiname" + (hasSRT ? " mit SRT-Datei" : " ohne SRT-Datei"),
-                             hint: hasSRT ? "DJI-Datei mit SRT-Flugdaten – vermutlich eine Drohne. Welches Modell?"
-                                          : "DJI-Datei ohne SRT – vermutlich Action-Kamera oder Osmo. Welches Modell?")
+        let srtNote = hasSRT ? " Daneben liegt eine SRT-Datei – vermutlich eine Drohne." : ""
+        let upName = name.uppercased()
+        let isDJI = upName.hasPrefix("DJI_") || Self.djiCode(bytes) != nil
+        if isDJI {
+            if let code = Self.djiSuffix(upName) {
+                return Detection(name: nil, signature: "dji-suffix:" + code, label: "DJI-Dateikürzel „\(code)“",
+                                 hint: "DJI-Datei mit Kürzel „\(code)“ am Namensende.\(srtNote) Welches Modell ist das?")
+            }
+            if let code = Self.djiCode(bytes) {
+                return Detection(name: nil, signature: "dji-code:" + code, label: "DJI-Kamera-Code „\(code)“",
+                                 hint: "DJI-Kamera mit Code „\(code)“.\(srtNote) Welches Modell ist das?")
+            }
+            return Detection(name: nil, signature: "dji:unbekannt", label: "DJI ohne Modellkennung",
+                             hint: "DJI-Datei ohne Modellkennung.\(srtNote) Welches Modell ist das?")
         }
 
         // Markenkennung in der Datei
@@ -477,9 +481,12 @@ final class Sorter: ObservableObject {
 
     /// Liest modelName="…" aus Sony-XML (auch eingebettet in der MP4).
     static func sonyName(fromXML s: String) -> String? {
-        guard s.range(of: "manufacturer=\"Sony\"", options: .caseInsensitive) != nil else { return nil }
-        if let r = s.range(of: #"modelName="([^"]+)""#, options: .regularExpression) {
-            let raw = s[r].dropFirst("modelName=\"".count).dropLast()
+        // Nur das <Device …>-Tag – <Lens modelName=…> ist das Objektiv!
+        guard let tagR = s.range(of: #"<Device[^>]*>"#, options: .regularExpression) else { return nil }
+        let tag = String(s[tagR])
+        guard tag.range(of: "manufacturer=\"Sony\"", options: .caseInsensitive) != nil else { return nil }
+        if let r = tag.range(of: #"modelName="[^"]+""#, options: .regularExpression) {
+            let raw = tag[r].dropFirst("modelName=\"".count).dropLast()
             return sonyPretty(String(raw))
         }
         return "Sony"
@@ -501,28 +508,20 @@ final class Sorter: ObservableObject {
         return clean("Sony " + model)
     }
 
-    /// Sucht einen Kennungstext hinter „DJI“ in den Dateibytes (z. B. „DJI FC8482“, „DJI OsmoAction6“).
-    static func djiToken(_ data: Data) -> String? {
-        let needle = Data("DJI".utf8)
-        var start = data.startIndex
-        var counts: [String: Int] = [:]
-        while let r = data.range(of: needle, in: start..<data.endIndex) {
-            var end = r.upperBound
-            while end < data.endIndex, end - r.lowerBound < 32 {
-                let b = data[end]
-                if b < 0x20 || b > 0x7e || b == 0x22 || b == 0x3c { break }
-                end += 1
-            }
-            if let s = String(data: data[r.lowerBound..<end], encoding: .ascii)?.trimmingCharacters(in: .whitespaces),
-               s.count >= 5,
-               s.range(of: #"^DJI_\d"#, options: .regularExpression) == nil,
-               s.range(of: #"[A-Za-z]{2,}"#, options: .regularExpression, range: s.index(s.startIndex, offsetBy: 3)..<s.endIndex) != nil
-                || s.range(of: #"\d{3,}"#, options: .regularExpression) != nil {
-                counts[s, default: 0] += 1
-            }
-            start = r.upperBound
-        }
-        return counts.max { $0.value < $1.value }?.key
+    /// Neues DJI-Namensschema: DJI_20250426155228_0038_D_M3P.MP4 → "M3P"
+    static func djiSuffix(_ upName: String) -> String? {
+        guard let r = upName.range(of: #"^DJI_\d{14}_\d{4}_[A-Z]_([A-Z0-9]{2,8})\."#, options: .regularExpression) else { return nil }
+        let part = upName[r].dropLast()            // ohne Punkt
+        guard let last = part.split(separator: "_").last else { return nil }
+        return String(last)
+    }
+
+    /// Kamera-Code wie "FC4370" aus den Dateibytes (stabil, ohne wechselnde Anhängsel).
+    static func djiCode(_ data: Data) -> String? {
+        guard let s = String(data: data, encoding: .isoLatin1),
+              let r = s.range(of: #"DJI[ _-]?FC\d{3,5}"#, options: .regularExpression),
+              let c = s[r].range(of: #"FC\d{3,5}"#, options: .regularExpression) else { return nil }
+        return String(s[r][c])
     }
 
     static func scanBrand(_ data: Data) -> String? {
