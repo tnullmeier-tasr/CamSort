@@ -6,6 +6,7 @@ struct CamSortApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var store: LearnedStore
     @StateObject private var sorter: Sorter
+    @StateObject private var theme = ThemeSettings()
 
     init() {
         let s = LearnedStore()
@@ -18,6 +19,7 @@ struct CamSortApp: App {
             ContentView()
                 .environmentObject(sorter)
                 .environmentObject(store)
+                .environmentObject(theme)
                 .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
@@ -44,10 +46,11 @@ enum Theme {
 struct ContentView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var store: LearnedStore
+    @EnvironmentObject var theme: ThemeSettings
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Theme.bgTop, Theme.bgBottom], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
             VStack(spacing: 0) {
                 Header()
@@ -88,6 +91,8 @@ struct Header: View {
     @EnvironmentObject var store: LearnedStore
     @State private var appear = false
     @State private var showLearned = false
+    @State private var showTheme = false
+    @EnvironmentObject var theme: ThemeSettings
     var body: some View {
         HStack(spacing: 12) {
             Image(nsImage: NSApp.applicationIconImage)
@@ -102,6 +107,15 @@ struct Header: View {
                     .foregroundStyle(.white.opacity(0.6))
             }
             Spacer()
+            Button { showTheme.toggle() } label: {
+                Image(systemName: "paintpalette.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(8)
+                    .background(Circle().fill(Theme.card))
+            }
+            .buttonStyle(.plain)
+            .help("Hintergrundfarbe ändern")
+            .popover(isPresented: $showTheme) { ThemePicker().environmentObject(theme) }
             Button { showLearned = true } label: {
                 Label("Gelernt", systemImage: "graduationcap.fill")
                     .font(.system(size: 12, weight: .semibold))
