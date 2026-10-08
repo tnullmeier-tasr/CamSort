@@ -3,8 +3,21 @@ import Foundation
 /// Liest DJI-SRT-Dateien und berechnet die Durchschnittsgeschwindigkeit eines Clips.
 enum SRTSpeed {
     /// Ø km/h: bevorzugt aus GPS-Strecke ÷ Dauer, sonst Mittel der H.S-Werte (m/s). nil = nicht lesbar.
+    enum Result { case speed(Double), noGPS, unreadable }
+
+    static func analyze(_ url: URL) -> Result {
+        guard let text = (try? String(contentsOf: url, encoding: .utf8)) ?? (try? String(contentsOf: url, encoding: .isoLatin1)),
+              text.contains("-->") else { return .unreadable }
+        if let v = averageKmh(text: text) { return .speed(v) }
+        return .noGPS
+    }
+
     static func averageKmh(_ url: URL) -> Double? {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) ?? String(contentsOf: url, encoding: .isoLatin1) else { return nil }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return averageKmh(text: text)
+    }
+
+    static func averageKmh(text: String) -> Double? {
         var points: [(t: Double, lat: Double, lon: Double)] = []
         var hs: [Double] = []
 

@@ -10,6 +10,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: SRT-Test
+        run: |
+          swiftc -parse-as-library -o srttest Sources/SRTSpeed.swift -Xfrontend -entry-point-function-name -Xfrontend srtmain Tests/srt_test.swift 2>/dev/null || swiftc -o srttest Sources/SRTSpeed.swift Tests/srt_test.swift
+          ./srttest Tests/DJI_0162.SRT
       - name: Build
         run: ./build.sh
       - uses: actions/upload-artifact@v4

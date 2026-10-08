@@ -294,14 +294,23 @@ final class Sorter: ObservableObject {
                 if store.droneBySpeed {
                     let stem = job.url.deletingPathExtension().lastPathComponent
                     let srt = [stem + ".SRT", stem + ".srt"].first { (siblings[job.dir] ?? []).contains($0) }
-                    if let srt, let kmh = SRTSpeed.averageKmh(job.dir.appendingPathComponent(srt)) {
-                        let folder: String
-                        if kmh >= store.standMin && kmh <= store.standMax { folder = "Stand" }
-                        else if kmh >= store.moveMin && kmh <= store.moveMax { folder = "Fahrt" }
-                        else { folder = "Dazwischen" }
-                        target = target.appendingPathComponent(folder)
-                        speeds[folder, default: 0] += 1
-                        hints.append(String(format: "%@: Ø %.1f km/h → %@", job.url.lastPathComponent, kmh, folder))
+                    if let srt {
+                        switch SRTSpeed.analyze(job.dir.appendingPathComponent(srt)) {
+                        case .speed(let kmh):
+                            let folder: String
+                            if kmh >= store.standMin && kmh <= store.standMax { folder = "Stand" }
+                            else if kmh >= store.moveMin && kmh <= store.moveMax { folder = "Fahrt" }
+                            else { folder = "Dazwischen" }
+                            target = target.appendingPathComponent(folder)
+                            speeds[folder, default: 0] += 1
+                            hints.append(String(format: "%@: Ø %.1f km/h → %@", job.url.lastPathComponent, kmh, folder))
+                        case .noGPS:
+                            target = target.appendingPathComponent("Ohne GPS")
+                            speeds["Ohne GPS", default: 0] += 1
+                            hints.append("\(job.url.lastPathComponent): SRT enthält keine GPS-Position – Geschwindigkeit nicht berechenbar → Ohne GPS")
+                        case .unreadable:
+                            hints.append("\(job.url.lastPathComponent): SRT-Datei nicht lesbar")
+                        }
                     }
                 }
                 if let o { target = target.appendingPathComponent(o) }
