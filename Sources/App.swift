@@ -122,6 +122,7 @@ struct Header: View {
 
 struct IdleView: View {
     @EnvironmentObject var sorter: Sorter
+    @EnvironmentObject var store: LearnedStore
     @State private var pulse = false
     @State private var targeted = false
 
@@ -180,6 +181,14 @@ struct IdleView: View {
                 }
                 .frame(maxHeight: 140)
             }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
+                Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
+            }
+            .toggleStyle(.switch).controlSize(.small)
+            .font(.system(size: 12, weight: .medium))
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 0)
 
@@ -263,7 +272,8 @@ struct CountGrid: View {
             ("Fotos", "photo.fill", Color(red: 0.6, green: 0.7, blue: 1), sorter.counts["Fotos"] ?? 0),
         ]
         if let v = sorter.counts["Video"], v > 0 { r.append(("Video", "film", .white, v)) }
-        let icons = ["XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft"]
+        let icons = ["XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft", "Musik": "music.note",
+                     "ZIP": "doc.zipper", "FCP": "film.stack"]
         let keys = Set(["XML", "LRF", "SRT"]).union(sorter.sideCounts.keys).sorted()
         for k in keys { r.append((k, icons[k] ?? "doc.fill", .white, sorter.sideCounts[k] ?? 0)) }
         return r
@@ -467,7 +477,7 @@ struct CameraSheet: View {
             HStack(spacing: 10) {
                 Image(systemName: "camera.badge.ellipsis").font(.system(size: 26)).foregroundStyle(.orange)
                 VStack(alignment: .leading) {
-                    Text("Unbekannte Kamera").font(.headline)
+                    Text(request.suggestion.isEmpty ? "Unbekannte Kamera" : "Neue Kamera gefunden").font(.headline)
                     Text(request.fileName).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 }
             }
@@ -485,11 +495,10 @@ struct CameraSheet: View {
                     }
                 }
             }
-            Toggle("Merken: Dateien, deren Name \(LearnedStore.prefixLabel(LearnedStore.prefix(of: request.fileName))) und auf .\((request.fileName as NSString).pathExtension.lowercased()) endet, gehören künftig zu dieser Kamera",
-                   isOn: $remember)
+            Toggle("Merken – künftig automatisch so einsortieren (\(request.signatureLabel))", isOn: $remember)
                 .font(.system(size: 11))
             HStack {
-                Button("Als „Unbekannt“ einsortieren") { sorter.answerCamera(nil, remember: false) }
+                Button(request.suggestion.isEmpty ? "Als „Unbekannt“ einsortieren" : "Diesmal nicht merken") { sorter.answerCamera(request.suggestion.isEmpty ? nil : request.suggestion, remember: false) }
                 Spacer()
                 Button("Übernehmen") { sorter.answerCamera(name, remember: remember) }
                     .keyboardShortcut(.defaultAction)
@@ -499,7 +508,7 @@ struct CameraSheet: View {
         .padding(22)
         .frame(width: 440)
         .interactiveDismissDisabled()
-        .onAppear { if request.hint.contains("DJI") { name = "DJI " } }
+        .onAppear { name = request.suggestion.isEmpty ? (request.hint.contains("DJI") ? "DJI " : "") : request.suggestion }
     }
 }
 
@@ -573,7 +582,7 @@ struct LearnedView: View {
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(r.camera).bold()
-                                Text("Dateiname \(LearnedStore.prefixLabel(r.prefix)), Endung .\(r.ext)")
+                                Text(r.label)
                                     .font(.system(size: 11)).foregroundStyle(.secondary)
                             }
                             Spacer()

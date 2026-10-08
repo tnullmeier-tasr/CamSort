@@ -1,22 +1,35 @@
 import Foundation
 
-/// Vom Nutzer gelernte Regeln – dauerhaft in den App-Einstellungen gespeichert.
+/// Vom Nutzer gelernte Kamera-Zuordnung – dauerhaft gespeichert.
 struct CameraRule: Codable, Hashable, Identifiable {
-    var id: String { prefix + "|" + ext }
-    let prefix: String      // Dateinamen-Anfang, z. B. "MVI_" – "#" = beginnt mit Ziffern
-    let ext: String         // kleingeschrieben, z. B. "mp4"
-    let camera: String
+    var id: String { signature }
+    let signature: String   // z. B. "auto:Sony Alpha 1", "dji:DJI FC8482+srt", "name:MVI_|mp4"
+    let label: String       // menschenlesbar: woran erkannt
+    let camera: String      // Ordnername, den der Nutzer gewählt hat
 }
 
 enum FileCategory: String, Codable, CaseIterable, Identifiable {
-    case video, photo, side, ignore
+    case video, photo, music, archive, project, side, ignore
     var id: String { rawValue }
     var label: String {
         switch self {
         case .video: return "Video"
         case .photo: return "Foto"
+        case .music: return "Musik"
+        case .archive: return "ZIP / Archiv"
+        case .project: return "Final-Cut-Projekt"
         case .side: return "Begleitdatei (eigener Ordner)"
         case .ignore: return "Ignorieren"
+        }
+    }
+    /// Zielordner für alles außer Video/Begleitdatei
+    var folder: String? {
+        switch self {
+        case .photo: return "Fotos"
+        case .music: return "Musik"
+        case .archive: return "ZIP"
+        case .project: return "FCP"
+        default: return nil
         }
     }
 }
@@ -25,15 +38,19 @@ enum FileCategory: String, Codable, CaseIterable, Identifiable {
 final class LearnedStore: ObservableObject {
     @Published private(set) var rules: [CameraRule] = []
     @Published private(set) var extensions: [String: FileCategory] = [:]
+    @Published var confirmCameras: Bool { didSet { d.set(confirmCameras, forKey: "confirmCameras") } }
+    @Published var includeSubfolders: Bool { didSet { d.set(includeSubfolders, forKey: "includeSubfolders") } }
 
     private let d = UserDefaults.standard
     init() {
-        if let data = d.data(forKey: "cameraRules"), let r = try? JSONDecoder().decode([CameraRule].self, from: data) { rules = r }
-        if let data = d.data(forKey: "extensions"), let e = try? JSONDecoder().decode([String: FileCategory].self, from: data) { extensions = e }
+        confirmCameras = d.object(forKey: "confirmCameras") as? Bool ?? true
+        includeSubfolders = d.object(forKey: "includeSubfolders") as? Bool ?? true
+        if let data = d.data(forKey: "cameraRules2"), let r = try? JSONDecoder().decode([CameraRule].self, from: data) { rules = r }
+        if let data = d.data(forKey: "extensions2"), let e = try? JSONDecoder().decode([String: FileCategory].self, from: data) { extensions = e }
     }
     private func save() {
-        d.set(try? JSONEncoder().encode(rules), forKey: "cameraRules")
-        d.set(try? JSONEncoder().encode(extensions), forKey: "extensions")
+        d.set(try? JSONEncoder().encode(rules), forKey: "cameraRules2")
+        d.set(try? JSONEncoder().encode(extensions), forKey: "extensions2")
     }
 
     static func prefix(of fileName: String) -> String {
@@ -45,14 +62,10 @@ final class LearnedStore: ObservableObject {
     }
     static func prefixLabel(_ p: String) -> String { p == "#" ? "beginnt mit Ziffern" : "beginnt mit „\(p)“" }
 
-    func camera(for fileName: String) -> String? {
-        let p = Self.prefix(of: fileName), e = (fileName as NSString).pathExtension.lowercased()
-        return rules.first { $0.prefix == p && $0.ext == e }?.camera
-    }
-    func learnCamera(fileName: String, camera: String) {
-        let r = CameraRule(prefix: Self.prefix(of: fileName), ext: (fileName as NSString).pathExtension.lowercased(), camera: camera)
-        rules.removeAll { $0.id == r.id }
-        rules.append(r); save()
+    func camera(for signature: String) -> String? { rules.first { $0.signature == signature }?.camera }
+    func learn(signature: String, label: String, camera: String) {
+        rules.removeAll { $0.signature == signature }
+        rules.append(CameraRule(signature: signature, label: label, camera: camera)); save()
     }
     func remove(_ r: CameraRule) { rules.removeAll { $0 == r }; save() }
 
