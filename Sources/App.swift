@@ -4,16 +4,24 @@ import AppKit
 @main
 struct CamSortApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var sorter = Sorter()
+    @StateObject private var store: LearnedStore
+    @StateObject private var sorter: Sorter
+
+    init() {
+        let s = LearnedStore()
+        _store = StateObject(wrappedValue: s)
+        _sorter = StateObject(wrappedValue: Sorter(store: s))
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(sorter)
-                .frame(width: 560, height: 640)
+                .environmentObject(store)
+                .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -35,6 +43,7 @@ enum Theme {
 
 struct ContentView: View {
     @EnvironmentObject var sorter: Sorter
+    @EnvironmentObject var store: LearnedStore
 
     var body: some View {
         ZStack {
@@ -62,11 +71,23 @@ struct ContentView: View {
         .sheet(item: $sorter.pendingDuplicate) { req in
             DuplicateSheet(request: req).environmentObject(sorter)
         }
+        .background(
+            Color.clear.sheet(item: $sorter.pendingCamera) { req in
+                CameraSheet(request: req).environmentObject(sorter).environmentObject(store)
+            }
+        )
+        .overlay(
+            Color.clear.allowsHitTesting(false).sheet(item: $sorter.pendingExtensions) { req in
+                ExtensionSheet(request: req).environmentObject(sorter)
+            }
+        )
     }
 }
 
 struct Header: View {
+    @EnvironmentObject var store: LearnedStore
     @State private var appear = false
+    @State private var showLearned = false
     var body: some View {
         HStack(spacing: 12) {
             Image(nsImage: NSApp.applicationIconImage)
@@ -81,9 +102,18 @@ struct Header: View {
                     .foregroundStyle(.white.opacity(0.6))
             }
             Spacer()
+            Button { showLearned = true } label: {
+                Label("Gelernt", systemImage: "graduationcap.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Capsule().fill(Theme.card))
+            }
+            .buttonStyle(.plain)
+            .help("Kameras und Dateitypen, die CamSort von dir gelernt hat")
         }
         .padding(.horizontal, 32)
         .padding(.bottom, 18)
+        .sheet(isPresented: $showLearned) { LearnedView().environmentObject(store) }
         .onAppear { withAnimation(.spring(response: 0.7, dampingFraction: 0.55)) { appear = true } }
     }
 }
@@ -226,30 +256,33 @@ struct SortingView: View {
 
 struct CountGrid: View {
     @EnvironmentObject var sorter: Sorter
-    let items: [(String, String, Color)] = [
-        ("Hochkant", "rectangle.portrait.fill", Theme.mint),
-        ("Quer", "rectangle.fill", Theme.orange),
-        ("Fotos", "photo.fill", Color(red: 0.6, green: 0.7, blue: 1)),
-        ("XML", "doc.text.fill", .white),
-        ("LRF", "film.fill", .white),
-        ("SRT", "text.alignleft", .white),
-    ]
+    private var items: [(key: String, icon: String, color: Color, n: Int)] {
+        var r: [(key: String, icon: String, color: Color, n: Int)] = [
+            ("Hochkant", "rectangle.portrait.fill", Theme.mint, sorter.counts["Hochkant"] ?? 0),
+            ("Quer", "rectangle.fill", Theme.orange, sorter.counts["Quer"] ?? 0),
+            ("Fotos", "photo.fill", Color(red: 0.6, green: 0.7, blue: 1), sorter.counts["Fotos"] ?? 0),
+        ]
+        if let v = sorter.counts["Video"], v > 0 { r.append(("Video", "film", .white, v)) }
+        let icons = ["XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft"]
+        let keys = Set(["XML", "LRF", "SRT"]).union(sorter.sideCounts.keys).sorted()
+        for k in keys { r.append((k, icons[k] ?? "doc.fill", .white, sorter.sideCounts[k] ?? 0)) }
+        return r
+    }
     var body: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-            ForEach(items, id: \.0) { item in
-                let n = sorter.counts[item.0] ?? 0
-                VStack(spacing: 6) {
-                    Image(systemName: item.1).font(.system(size: 18)).foregroundStyle(item.2)
-                    Text("\(n)").font(.system(size: 20, weight: .bold, design: .rounded))
+            ForEach(items, id: \.key) { item in
+                VStack(spacing: 5) {
+                    Image(systemName: item.icon).font(.system(size: 16)).foregroundStyle(item.color)
+                    Text("\(item.n)").font(.system(size: 19, weight: .bold, design: .rounded))
                         .contentTransition(.numericText())
-                        .animation(.spring(), value: n)
-                    Text(item.0).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.6))
+                        .animation(.spring(), value: item.n)
+                    Text(item.key).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.6))
                 }
-                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                .frame(maxWidth: .infinity).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
-                .scaleEffect(n > 0 ? 1 : 0.97)
-                .opacity(n > 0 ? 1 : 0.55)
-                .animation(.spring(response: 0.4, dampingFraction: 0.6), value: n > 0)
+                .scaleEffect(item.n > 0 ? 1 : 0.97)
+                .opacity(item.n > 0 ? 1 : 0.5)
+                .animation(.spring(response: 0.4, dampingFraction: 0.6), value: item.n > 0)
             }
         }
     }
@@ -260,68 +293,48 @@ struct CountGrid: View {
 struct DoneView: View {
     @EnvironmentObject var sorter: Sorter
     @State private var pop = false
-    @State private var showProblems = false
+    @State private var showProblems = true
 
     var cancelled: Bool { sorter.phase == .cancelled }
     var hasProblems: Bool { !sorter.problems.isEmpty }
+    var accent: Color { cancelled || hasProblems ? Theme.orange : Theme.mint }
 
     var body: some View {
-        VStack(spacing: 16) {
-            ZStack {
-                Circle().fill((cancelled || hasProblems ? Theme.orange : Theme.mint).opacity(0.2))
-                    .frame(width: 120, height: 120)
-                    .scaleEffect(pop ? 1 : 0.2)
-                Image(systemName: cancelled ? "stop.circle.fill"
-                                  : hasProblems ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 64, weight: .bold))
-                    .foregroundStyle(cancelled || hasProblems ? Theme.orange : Theme.mint)
-                    .scaleEffect(pop ? 1 : 0.1)
-                    .rotationEffect(.degrees(pop ? 0 : -90))
-            }
-            .onAppear { withAnimation(.spring(response: 0.55, dampingFraction: 0.5)) { pop = true } }
-
-            Text(cancelled ? "Abgebrochen" : hasProblems ? "Fertig – mit Hinweisen" : "Fertig sortiert!")
-                .font(.system(size: 24, weight: .bold, design: .rounded))
-            Text("\(sorter.movedTotal) Dateien verschoben"
-                 + (sorter.skipped > 0 ? " · \(sorter.skipped) übersprungen" : ""))
-                .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
-
-            CountGrid()
-
-            if !sorter.cameras.isEmpty {
-                HStack(spacing: 8) {
-                    ForEach(sorter.cameras.sorted { $0.value > $1.value }, id: \.key) { cam in
-                        HStack(spacing: 5) {
-                            Image(systemName: cam.key == "iPhone" ? "iphone" : "camera.fill")
-                            Text("\(cam.key) \(cam.value)")
-                        }
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Capsule().fill(Theme.card))
+        VStack(spacing: 14) {
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 14) {
+                    ZStack {
+                        Circle().fill(accent.opacity(0.2)).frame(width: 96, height: 96).scaleEffect(pop ? 1 : 0.2)
+                        Image(systemName: cancelled ? "stop.circle.fill"
+                                          : hasProblems ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                            .font(.system(size: 50, weight: .bold))
+                            .foregroundStyle(accent)
+                            .scaleEffect(pop ? 1 : 0.1)
+                            .rotationEffect(.degrees(pop ? 0 : -90))
                     }
-                }
-            }
+                    .onAppear { withAnimation(.spring(response: 0.55, dampingFraction: 0.5)) { pop = true } }
 
-            if hasProblems {
-                Button { withAnimation { showProblems.toggle() } } label: {
-                    Label("\(sorter.problems.count) Dateien nicht verschoben", systemImage: showProblems ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.orange)
-                }.buttonStyle(.plain)
-                if showProblems {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(sorter.problems, id: \.self) { Text($0).font(.system(size: 11)) }
-                            Text("Diese Dateien liegen unverändert an ihrem alten Platz.")
-                                .font(.system(size: 11, weight: .semibold)).padding(.top, 4)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    Text(cancelled ? "Abgebrochen" : hasProblems ? "Fertig – mit Hinweisen" : "Fertig sortiert!")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                    Text(summary).font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+
+                    CountGrid()
+
+                    if !sorter.cameras.isEmpty {
+                        FlowChips(items: sorter.cameras.sorted { $0.value > $1.value }.map { ($0.key, $0.value) })
                     }
-                    .frame(maxHeight: 90)
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
-                }
-            }
 
-            Spacer(minLength: 0)
+                    if hasProblems { MessageBox(title: plural(sorter.problems.count, "Datei", "Dateien") + " nicht verschoben",
+                                                lines: sorter.problems,
+                                                footer: "Diese Dateien liegen unverändert an ihrem alten Platz.",
+                                                color: Theme.orange, open: $showProblems) }
+                    if !sorter.hints.isEmpty { MessageBox(title: plural(sorter.hints.count, "Hinweis", "Hinweise"),
+                                                          lines: sorter.hints, footer: nil,
+                                                          color: Theme.mint, open: .constant(true)) }
+                }
+                .padding(.bottom, 6)
+            }
 
             HStack(spacing: 12) {
                 Button { sorter.revealInFinder() } label: {
@@ -337,6 +350,67 @@ struct DoneView: View {
             }
             .font(.system(size: 14, weight: .semibold, design: .rounded))
         }
+    }
+
+    private var summary: String {
+        var parts = [plural(sorter.movedTotal, "Datei", "Dateien") + " verschoben"]
+        if sorter.skipped > 0 { parts.append("\(sorter.skipped) übersprungen") }
+        if sorter.ignored > 0 { parts.append("\(sorter.ignored) ignoriert") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+func plural(_ n: Int, _ one: String, _ many: String) -> String { "\(n) \(n == 1 ? one : many)" }
+
+struct FlowChips: View {
+    let items: [(String, Int)]
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 8)], spacing: 8) {
+            ForEach(items, id: \.0) { cam in
+                HStack(spacing: 5) {
+                    Image(systemName: cam.0 == "iPhone" ? "iphone" : cam.0 == "Unbekannt" ? "questionmark.circle" : "camera.fill")
+                    Text("\(cam.0)  \(cam.1)").lineLimit(1)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(Capsule().fill(Theme.card))
+            }
+        }
+    }
+}
+
+struct MessageBox: View {
+    let title: String
+    let lines: [String]
+    let footer: String?
+    let color: Color
+    @Binding var open: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { withAnimation { open.toggle() } } label: {
+                HStack {
+                    Image(systemName: open ? "chevron.down" : "chevron.right")
+                    Text(title)
+                    Spacer()
+                }
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(color)
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if open {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text("• " + line).font(.system(size: 11)).foregroundStyle(.white.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                if let f = footer {
+                    Text(f).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(color.opacity(0.12)))
     }
 }
 
@@ -371,5 +445,160 @@ struct DuplicateSheet: View {
         .padding(24)
         .frame(width: 380)
         .interactiveDismissDisabled()
+    }
+}
+
+// MARK: - Unbekannte Kamera
+
+struct CameraSheet: View {
+    @EnvironmentObject var sorter: Sorter
+    @EnvironmentObject var store: LearnedStore
+    let request: CameraRequest
+    @State private var name = ""
+    @State private var remember = true
+
+    private var suggestions: [String] {
+        let base = ["DJI Osmo Action 6", "DJI Mini 5 Pro", "Sony", "iPhone", "Samsung", "Insta360", "Canon", "GoPro"]
+        return Array(NSOrderedSet(array: store.cameraNames + base)) as? [String] ?? base
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "camera.badge.ellipsis").font(.system(size: 26)).foregroundStyle(.orange)
+                VStack(alignment: .leading) {
+                    Text("Unbekannte Kamera").font(.headline)
+                    Text(request.fileName).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                }
+            }
+            if !request.hint.isEmpty {
+                Text(request.hint).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Text("Mit welcher Kamera wurde das aufgenommen?").font(.system(size: 13))
+            TextField("Name der Kamera, z. B. Canon R6", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { if !name.isEmpty { sorter.answerCamera(name, remember: remember) } }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(suggestions, id: \.self) { s in
+                        Button(s) { name = s }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+            }
+            Toggle("Merken: Dateien, deren Name \(LearnedStore.prefixLabel(LearnedStore.prefix(of: request.fileName))) und auf .\((request.fileName as NSString).pathExtension.lowercased()) endet, gehören künftig zu dieser Kamera",
+                   isOn: $remember)
+                .font(.system(size: 11))
+            HStack {
+                Button("Als „Unbekannt“ einsortieren") { sorter.answerCamera(nil, remember: false) }
+                Spacer()
+                Button("Übernehmen") { sorter.answerCamera(name, remember: remember) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 440)
+        .interactiveDismissDisabled()
+        .onAppear { if request.hint.contains("DJI") { name = "DJI " } }
+    }
+}
+
+// MARK: - Unbekannte Dateitypen
+
+struct ExtensionSheet: View {
+    @EnvironmentObject var sorter: Sorter
+    let request: ExtensionRequest
+    @State private var choice: [String: FileCategory] = [:]
+    @State private var remember = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "questionmark.folder.fill").font(.system(size: 26)).foregroundStyle(.orange)
+                VStack(alignment: .leading) {
+                    Text("Unbekannte Dateitypen").font(.headline)
+                    Text("Was soll mit diesen Dateien passieren?").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(request.extensions, id: \.ext) { e in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(".\(e.ext.uppercased())").font(.system(size: 13, weight: .bold))
+                                Text("\(e.count)× – z. B. \(e.example)").font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            Picker("", selection: Binding(get: { choice[e.ext] ?? .ignore }, set: { choice[e.ext] = $0 })) {
+                                ForEach(FileCategory.allCases) { Text($0.label).tag($0) }
+                            }
+                            .labelsHidden().frame(width: 210)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 240)
+            Toggle("Für diese Dateitypen merken", isOn: $remember).font(.system(size: 12))
+            HStack {
+                Button("Abbrechen") { sorter.answerExtensions(nil, remember: false); sorter.cancel() }
+                Spacer()
+                Button("Weiter") {
+                    var m: [String: FileCategory] = [:]
+                    for e in request.extensions { m[e.ext] = choice[e.ext] ?? .ignore }
+                    sorter.answerExtensions(m, remember: remember)
+                }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 460)
+        .interactiveDismissDisabled()
+    }
+}
+
+// MARK: - Gelerntes verwalten
+
+struct LearnedView: View {
+    @EnvironmentObject var store: LearnedStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Gelernt").font(.title2.bold())
+            Text("Das hat CamSort sich gemerkt. Mit – kannst du Einträge wieder löschen.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            List {
+                Section("Kameras") {
+                    if store.rules.isEmpty { Text("Noch nichts gelernt").foregroundStyle(.secondary) }
+                    ForEach(store.rules) { r in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(r.camera).bold()
+                                Text("Dateiname \(LearnedStore.prefixLabel(r.prefix)), Endung .\(r.ext)")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button { store.remove(r) } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                }
+                Section("Dateitypen") {
+                    if store.extensions.isEmpty { Text("Noch nichts gelernt").foregroundStyle(.secondary) }
+                    ForEach(store.extensions.keys.sorted(), id: \.self) { e in
+                        HStack {
+                            Text(".\(e.uppercased())").bold()
+                            Text(store.extensions[e]?.label ?? "").foregroundStyle(.secondary)
+                            Spacer()
+                            Button { store.removeExtension(e) } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .frame(height: 300)
+            HStack { Spacer(); Button("Fertig") { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .padding(22)
+        .frame(width: 480)
     }
 }

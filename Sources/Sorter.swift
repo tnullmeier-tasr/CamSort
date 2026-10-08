@@ -2,7 +2,7 @@ import Foundation
 import AVFoundation
 import AppKit
 
-// MARK: - Modelle
+// MARK: - Rückfragen
 
 enum DupChoice { case skip, keepBoth, replace }
 
@@ -16,14 +16,32 @@ final class DuplicateRequest: Identifiable {
     }
 }
 
-enum Phase { case idle, scanning, sorting, done, cancelled }
+final class CameraRequest: Identifiable {
+    let id = UUID()
+    let fileName: String
+    let hint: String          // was die App selbst gefunden hat (z. B. Marke)
+    let continuation: CheckedContinuation<String?, Never>
+    init(fileName: String, hint: String, continuation: CheckedContinuation<String?, Never>) {
+        self.fileName = fileName; self.hint = hint; self.continuation = continuation
+    }
+}
 
-private enum Kind { case video, photo, side(String) }
+final class ExtensionRequest: Identifiable {
+    let id = UUID()
+    let extensions: [(ext: String, example: String, count: Int)]
+    let continuation: CheckedContinuation<[String: FileCategory]?, Never>
+    init(extensions: [(ext: String, example: String, count: Int)], continuation: CheckedContinuation<[String: FileCategory]?, Never>) {
+        self.extensions = extensions; self.continuation = continuation
+    }
+}
+
+enum Phase { case idle, scanning, sorting, done, cancelled }
 
 private struct Job {
     let base: URL
     let url: URL
-    let kind: Kind
+    let cat: FileCategory
+    let sideKey: String
 }
 
 // MARK: - Sortierer
@@ -35,29 +53,39 @@ final class Sorter: ObservableObject {
     @Published var total = 0
     @Published var processed = 0
     @Published var currentFile = ""
-    @Published var counts: [String: Int] = [:]          // Hochkant, Quer, Fotos, XML, LRF, SRT
+    @Published var counts: [String: Int] = [:]
+    @Published var sideCounts: [String: Int] = [:]
     @Published var cameras: [String: Int] = [:]
     @Published var skipped = 0
+    @Published var ignored = 0
     @Published var problems: [String] = []
+    @Published var hints: [String] = []
     @Published var pendingDuplicate: DuplicateRequest?
+    @Published var pendingCamera: CameraRequest?
+    @Published var pendingExtensions: ExtensionRequest?
 
-    static let videoExt: Set<String> = ["mp4", "mov", "m4v"]
-    static let photoExt: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "dng", "arw", "hif", "tif", "tiff", "raw"]
-    static let sideExt: Set<String> = ["xml", "lrf", "srt"]
+    let store: LearnedStore
+
+    static let videoExt: Set<String> = ["mp4", "mov", "m4v", "insv", "mts", "m2ts", "avi", "mkv", "3gp", "lrv"]
+    static let photoExt: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "dng", "arw", "hif", "tif", "tiff", "raw",
+                                        "cr2", "cr3", "nef", "raf", "orf", "rw2", "insp", "webp", "gif", "srw", "pef"]
+    static let sideExt: Set<String> = ["xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "dat"]
+    static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini"]
 
     private var dupForAll: DupChoice?
+    private var askedCameras: [String: String] = [:]   // Regel-Schlüssel -> Antwort in diesem Durchlauf
     private var task: Task<Void, Never>?
     private let fm = FileManager.default
 
+    init(store: LearnedStore) { self.store = store }
+
     var progress: Double { total == 0 ? 0 : Double(processed) / Double(total) }
-    var movedTotal: Int { counts.values.reduce(0, +) }
+    var movedTotal: Int { counts.values.reduce(0, +) + sideCounts.values.reduce(0, +) }
 
     func addFolders(_ urls: [URL]) {
         for u in urls {
             var isDir: ObjCBool = false
-            if fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue, !folders.contains(u) {
-                folders.append(u)
-            }
+            if fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue, !folders.contains(u) { folders.append(u) }
         }
     }
 
@@ -73,13 +101,17 @@ final class Sorter: ObservableObject {
 
     func reset() {
         folders = []; phase = .idle; total = 0; processed = 0; currentFile = ""
-        counts = [:]; cameras = [:]; skipped = 0; problems = []; dupForAll = nil
+        clearResults()
+    }
+
+    private func clearResults() {
+        counts = [:]; sideCounts = [:]; cameras = [:]; skipped = 0; ignored = 0
+        problems = []; hints = []; dupForAll = nil; askedCameras = [:]
     }
 
     func start() {
         guard !folders.isEmpty else { return }
-        counts = [:]; cameras = [:]; skipped = 0; problems = []; dupForAll = nil
-        processed = 0
+        clearResults(); processed = 0
         phase = .scanning
         task = Task { await run() }
     }
@@ -87,6 +119,8 @@ final class Sorter: ObservableObject {
     func cancel() {
         task?.cancel()
         if let p = pendingDuplicate { pendingDuplicate = nil; p.continuation.resume(returning: (.skip, false)) }
+        if let p = pendingCamera { pendingCamera = nil; p.continuation.resume(returning: nil) }
+        if let p = pendingExtensions { pendingExtensions = nil; p.continuation.resume(returning: nil) }
     }
 
     func answerDuplicate(_ choice: DupChoice, forAll: Bool) {
@@ -95,31 +129,76 @@ final class Sorter: ObservableObject {
         p.continuation.resume(returning: (choice, forAll))
     }
 
-    func revealInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting(folders)
+    func answerCamera(_ name: String?, remember: Bool) {
+        guard let p = pendingCamera else { return }
+        pendingCamera = nil
+        let clean = name.map { Self.clean($0) }.flatMap { $0.isEmpty ? nil : $0 }
+        if let c = clean, remember { store.learnCamera(fileName: p.fileName, camera: c) }
+        p.continuation.resume(returning: clean)
+    }
+
+    func answerExtensions(_ map: [String: FileCategory]?, remember: Bool) {
+        guard let p = pendingExtensions else { return }
+        pendingExtensions = nil
+        if let m = map, remember { for (e, c) in m { store.learnExtension(e, as: c) } }
+        p.continuation.resume(returning: map)
+    }
+
+    func revealInFinder() { NSWorkspace.shared.activateFileViewerSelecting(folders) }
+
+    // MARK: Kategorien
+
+    private func category(for ext: String) -> FileCategory? {
+        if let learned = store.extensions[ext] { return learned }
+        if Self.videoExt.contains(ext) { return .video }
+        if Self.photoExt.contains(ext) { return .photo }
+        if Self.sideExt.contains(ext) { return .side }
+        if Self.alwaysIgnore.contains(ext) || ext.isEmpty { return .ignore }
+        return nil
     }
 
     // MARK: Ablauf
 
     private func run() async {
-        var videos: [Job] = []
-        var others: [Job] = []
-        var siblingNames: [URL: Set<String>] = [:]
+        var found: [(base: URL, url: URL, ext: String)] = []
+        var siblings: [URL: Set<String>] = [:]
 
         for base in folders {
             guard let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.isRegularFileKey],
                                                          options: [.skipsHiddenFiles]) else {
-                problems.append("\(base.lastPathComponent): kein Zugriff auf den Ordner")
+                problems.append("\(base.lastPathComponent): kein Zugriff auf den Ordner – bitte in den Systemeinstellungen unter Datenschutz & Sicherheit erlauben")
                 continue
             }
-            siblingNames[base] = Set(items.map { $0.lastPathComponent })
-            for u in items {
-                let isFile = (try? u.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
-                guard isFile else { continue }
-                let ext = u.pathExtension.lowercased()
-                if Self.videoExt.contains(ext) { videos.append(Job(base: base, url: u, kind: .video)) }
-                else if Self.photoExt.contains(ext) { others.append(Job(base: base, url: u, kind: .photo)) }
-                else if Self.sideExt.contains(ext) { others.append(Job(base: base, url: u, kind: .side(ext.uppercased()))) }
+            siblings[base] = Set(items.map { $0.lastPathComponent })
+            for u in items where ((try? u.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false) {
+                found.append((base, u, u.pathExtension.lowercased()))
+            }
+        }
+
+        // Unbekannte Dateitypen erfragen
+        var unknown: [String: (example: String, count: Int)] = [:]
+        for f in found where category(for: f.ext) == nil {
+            let cur = unknown[f.ext]
+            unknown[f.ext] = (cur?.example ?? f.url.lastPathComponent, (cur?.count ?? 0) + 1)
+        }
+        var sessionExt: [String: FileCategory] = [:]
+        if !unknown.isEmpty {
+            let list = unknown.map { (ext: $0.key, example: $0.value.example, count: $0.value.count) }.sorted { $0.ext < $1.ext }
+            let answer: [String: FileCategory]? = await withCheckedContinuation { c in
+                pendingExtensions = ExtensionRequest(extensions: list, continuation: c)
+            }
+            if Task.isCancelled { phase = .cancelled; return }
+            sessionExt = answer ?? [:]
+        }
+
+        var videos: [Job] = [], others: [Job] = []
+        for f in found {
+            let cat = category(for: f.ext) ?? sessionExt[f.ext] ?? .ignore
+            let job = Job(base: f.base, url: f.url, cat: cat, sideKey: f.ext.uppercased())
+            switch cat {
+            case .video: videos.append(job)
+            case .photo, .side: others.append(job)
+            case .ignore: if !Self.alwaysIgnore.contains(f.ext) { ignored += 1 }
             }
         }
 
@@ -132,48 +211,44 @@ final class Sorter: ObservableObject {
             currentFile = job.url.lastPathComponent
             guard fm.fileExists(atPath: job.url.path) else { processed += 1; continue }
 
-            switch job.kind {
+            switch job.cat {
             case .video:
                 let asset = AVURLAsset(url: job.url)
-                guard let o = await orientation(of: asset) else {
-                    problems.append("\(job.url.lastPathComponent): Video konnte nicht gelesen werden")
-                    break
+                let o = await orientation(of: asset)
+                guard let cam = await camera(for: job.url, asset: asset, siblings: siblings[job.base] ?? []) else {
+                    phase = .cancelled; return
                 }
-                let cam = await camera(for: job.url, asset: asset, siblings: siblingNames[job.base] ?? [])
-                let target = job.base.appendingPathComponent("Videos").appendingPathComponent(cam).appendingPathComponent(o)
+                var target = job.base.appendingPathComponent("Videos").appendingPathComponent(cam)
+                if let o { target = target.appendingPathComponent(o) }
+                else { hints.append("\(job.url.lastPathComponent): Ausrichtung nicht lesbar – liegt direkt in Videos/\(cam)") }
                 if await move(job.url, to: target) {
-                    counts[o, default: 0] += 1
+                    counts[o ?? "Video", default: 0] += 1
                     cameras[cam, default: 0] += 1
                 }
             case .photo:
                 if await move(job.url, to: job.base.appendingPathComponent("Fotos")) { counts["Fotos", default: 0] += 1 }
-            case .side(let key):
-                if await move(job.url, to: job.base.appendingPathComponent(key)) { counts[key, default: 0] += 1 }
+            case .side:
+                if await move(job.url, to: job.base.appendingPathComponent(job.sideKey)) { sideCounts[job.sideKey, default: 0] += 1 }
+            case .ignore: break
             }
-            withAnimationSafe { processed += 1 }
+            processed += 1
         }
         currentFile = ""
         phase = Task.isCancelled ? .cancelled : .done
     }
-
-    private func withAnimationSafe(_ body: () -> Void) { body() }
 
     // MARK: Verschieben
 
     private func move(_ src: URL, to dir: URL) async -> Bool {
         let name = src.lastPathComponent
         do { try fm.createDirectory(at: dir, withIntermediateDirectories: true) }
-        catch { problems.append("\(name): Zielordner konnte nicht angelegt werden"); return false }
+        catch { problems.append("\(name): Zielordner konnte nicht angelegt werden (\(error.localizedDescription))"); return false }
 
         var dst = dir.appendingPathComponent(name)
         if fm.fileExists(atPath: dst.path) {
-            let choice = await askDuplicate(name: name, folder: dir.path)
-            switch choice {
-            case .skip:
-                skipped += 1
-                return false
-            case .keepBoth:
-                dst = freeURL(in: dir, for: name)
+            switch await askDuplicate(name: name, folder: dir.path) {
+            case .skip: skipped += 1; return false
+            case .keepBoth: dst = freeURL(in: dir, for: name)
             case .replace:
                 do { try fm.trashItem(at: dst, resultingItemURL: nil) }
                 catch { problems.append("\(name): alte Datei ließ sich nicht in den Papierkorb legen"); return false }
@@ -185,7 +260,7 @@ final class Sorter: ObservableObject {
 
     private func askDuplicate(name: String, folder: String) async -> DupChoice {
         if let all = dupForAll { return all }
-        let (choice, forAll): (DupChoice, Bool) = await withCheckedContinuation { (c: CheckedContinuation<(DupChoice, Bool), Never>) in
+        let (choice, forAll): (DupChoice, Bool) = await withCheckedContinuation { c in
             pendingDuplicate = DuplicateRequest(name: name, folder: folder, continuation: c)
         }
         if forAll { dupForAll = choice }
@@ -197,14 +272,13 @@ final class Sorter: ObservableObject {
         let stem = (name as NSString).deletingPathExtension
         var i = 2
         while true {
-            let n = ext.isEmpty ? "\(stem) (\(i))" : "\(stem) (\(i)).\(ext)"
-            let u = dir.appendingPathComponent(n)
+            let u = dir.appendingPathComponent(ext.isEmpty ? "\(stem) (\(i))" : "\(stem) (\(i)).\(ext)")
             if !fm.fileExists(atPath: u.path) { return u }
             i += 1
         }
     }
 
-    // MARK: Erkennung
+    // MARK: Ausrichtung
 
     private func orientation(of asset: AVURLAsset) async -> String? {
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
@@ -215,20 +289,42 @@ final class Sorter: ObservableObject {
         return h > w ? "Hochkant" : "Quer"
     }
 
-    private func camera(for url: URL, asset: AVURLAsset, siblings: Set<String>) async -> String {
+    // MARK: Kamera
+
+    /// nil = Nutzer hat abgebrochen
+    private func camera(for url: URL, asset: AVURLAsset, siblings: Set<String>) async -> String? {
+        let name = url.lastPathComponent
+
+        // 1) Gelernt
+        if let learned = store.camera(for: name) { return learned }
+
+        // 2) Erkannt
+        let detected = await detectCamera(url: url, asset: asset, siblings: siblings)
+        if let d = detected.name { return d }
+
+        // 3) Nachfragen (einmal pro Dateimuster und Durchlauf)
+        let key = LearnedStore.prefix(of: name) + "|" + url.pathExtension.lowercased()
+        if let a = askedCameras[key] { return a }
+        let answer: String? = await withCheckedContinuation { c in
+            pendingCamera = CameraRequest(fileName: name, hint: detected.hint, continuation: c)
+        }
+        if Task.isCancelled { return nil }
+        let result = answer ?? "Unbekannt"
+        askedCameras[key] = result
+        return result
+    }
+
+    private func detectCamera(url: URL, asset: AVURLAsset, siblings: Set<String>) async -> (name: String?, hint: String) {
         let name = url.lastPathComponent
         let stem = url.deletingPathExtension().lastPathComponent
 
-        // Sony: Begleit-XML
+        // Sony: Begleit-XML (enthält auch das Modell)
         for x in [stem + "M01.XML", stem + "M01.xml"] where siblings.contains(x) {
-            let xmlURL = url.deletingLastPathComponent().appendingPathComponent(x)
-            if let s = try? String(contentsOf: xmlURL, encoding: .utf8),
-               s.range(of: "manufacturer=\"Sony\"", options: .caseInsensitive) != nil {
-                return "Sony"
-            }
+            if let s = try? String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(x), encoding: .utf8),
+               s.range(of: "manufacturer=\"Sony\"", options: .caseInsensitive) != nil { return ("Sony", "") }
         }
 
-        // Metadaten im Video
+        // Metadaten im Video (iPhone, Android/Samsung, viele Kameras)
         var make = "", model = ""
         if let items = try? await asset.load(.metadata) {
             for item in items {
@@ -238,30 +334,77 @@ final class Sorter: ObservableObject {
                 else if (key.contains("make") || key.contains("manufacturer")), make.isEmpty { make = val }
             }
         }
-        let all = "\(make) \(model)".trimmingCharacters(in: .whitespaces)
-        let low = all.lowercased()
-        if low.contains("iphone") { return "iPhone" }
-        if low.contains("sony") { return "Sony" }
-        if low.contains("dji") {
-            var m = model.isEmpty ? make : model
-            if !m.lowercased().contains("dji") { m = "DJI " + m }
-            return clean(m)
-        }
-        if !all.isEmpty {
-            if !model.isEmpty, model.lowercased().hasPrefix(make.lowercased()) { return clean(model) }
-            return clean(all)
-        }
+        if let n = nameFrom(make: make, model: model) { return (n, "") }
 
-        // Dateiname als Notlösung
+        // Markenkennung in der Datei selbst (Canon, Insta360, GoPro, DJI, Samsung …)
+        let brand = scanBrand(url)
+        if let b = brand, b != "DJI" { return (b, "") }
+
+        // Dateiname
         let up = name.uppercased()
-        if up.hasPrefix("DJI_") { return "DJI" }
-        if up.range(of: #"^C\d{4}"#, options: .regularExpression) != nil { return "Sony" }
-        if up.hasPrefix("IMG_") && up.hasSuffix(".MOV") { return "iPhone" }
-        if up.range(of: #"^G[HXSL]\d+"#, options: .regularExpression) != nil { return "GoPro" }
-        return "Unbekannt"
+        func starts(_ re: String) -> Bool { up.range(of: re, options: .regularExpression) != nil }
+        if starts(#"^C\d{4}"#) { return ("Sony", "") }
+        if starts(#"^IMG_.*\.MOV$"#) { return ("iPhone", "") }
+        if starts(#"^G[HXSL]\d+"#) || starts(#"^GOPR\d+"#) { return ("GoPro", "") }
+        if starts(#"^MVI_\d+"#) { return ("Canon", "") }
+        if starts(#"^PXL_\d+"#) { return ("Google Pixel", "") }
+        if starts(#"\.INSV$"#) || starts(#"^VID_\d{8}_\d{6}_\d{2}_\d+"#) { return ("Insta360", "") }
+
+        // DJI: Marke klar, Modell unklar → nachfragen, damit Action/Mini getrennt werden können
+        if brand == "DJI" || up.hasPrefix("DJI_") { return (nil, "Vermutlich DJI – welches Modell?") }
+        if starts(#"^\d{8}_\d{6}"#) { return (nil, "Vermutlich ein Android-Handy (z. B. Samsung)") }
+        return (nil, "")
     }
 
-    private func clean(_ s: String) -> String {
+    private func nameFrom(make: String, model: String) -> String? {
+        let mk = make.trimmingCharacters(in: .whitespaces), md = model.trimmingCharacters(in: .whitespaces)
+        let all = "\(mk) \(md)".lowercased()
+        guard !mk.isEmpty || !md.isEmpty else { return nil }
+        if all.contains("iphone") { return "iPhone" }
+        if all.contains("ipad") { return "iPad" }
+        if all.contains("sony") { return "Sony" }
+        if all.contains("dji") {
+            var m = md.isEmpty ? mk : md
+            if !m.lowercased().contains("dji") { m = "DJI " + m }
+            return Self.clean(m)
+        }
+        if mk.lowercased() == "samsung" {
+            return Self.clean("Samsung " + Self.samsungName(md))
+        }
+        if !md.isEmpty, md.lowercased().hasPrefix(mk.lowercased()) { return Self.clean(md) }
+        let brand = mk.prefix(1).uppercased() + mk.dropFirst()
+        return Self.clean("\(brand) \(md)")
+    }
+
+    private static func samsungName(_ model: String) -> String {
+        // SM-S9xx → Galaxy S, SM-A → Galaxy A usw. – sonst Modellnummer
+        let m = model.uppercased()
+        let map: [(String, String)] = [("SM-S9", "Galaxy S"), ("SM-A", "Galaxy A"), ("SM-F", "Galaxy Z"), ("SM-M", "Galaxy M"), ("SM-G", "Galaxy")]
+        for (p, n) in map where m.hasPrefix(p) { return "\(n) (\(model))" }
+        return model
+    }
+
+    /// Sucht Herstellerkennungen in Anfang und Ende der Datei (nur lesen).
+    private func scanBrand(_ url: URL) -> String? {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? h.close() }
+        let chunk = 512 * 1024
+        var data = (try? h.read(upToCount: chunk)) ?? Data()
+        if let size = try? h.seekToEnd(), size > UInt64(chunk) {
+            try? h.seek(toOffset: size - UInt64(chunk))
+            data.append((try? h.read(upToCount: chunk)) ?? Data())
+        }
+        let brands: [(String, String)] = [
+            ("Insta360", "Insta360"), ("Canon", "Canon"), ("GoPro", "GoPro"), ("SAMSUNG", "Samsung"),
+            ("samsung", "Samsung"), ("Panasonic", "Panasonic"), ("FUJIFILM", "Fujifilm"), ("NIKON", "Nikon"),
+            ("Nikon", "Nikon"), ("OLYMPUS", "Olympus"), ("OM Digital", "OM System"), ("Blackmagic", "Blackmagic"),
+            ("Xiaomi", "Xiaomi"), ("HUAWEI", "Huawei"), ("OnePlus", "OnePlus"), ("DJI", "DJI"),
+        ]
+        for (needle, brand) in brands where data.range(of: Data(needle.utf8)) != nil { return brand }
+        return nil
+    }
+
+    static func clean(_ s: String) -> String {
         s.replacingOccurrences(of: "/", with: "-")
          .replacingOccurrences(of: ":", with: "-")
          .trimmingCharacters(in: .whitespacesAndNewlines)
