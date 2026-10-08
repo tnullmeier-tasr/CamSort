@@ -69,6 +69,7 @@ final class Sorter: ObservableObject {
     @Published var counts: [String: Int] = [:]
     @Published var sideCounts: [String: Int] = [:]
     @Published var cameras: [String: Int] = [:]
+    @Published var lenses: [String: Int] = [:]
     @Published var skipped = 0
     @Published var ignored = 0
     @Published var problems: [String] = []
@@ -122,7 +123,7 @@ final class Sorter: ObservableObject {
     }
 
     private func clearResults() {
-        counts = [:]; sideCounts = [:]; cameras = [:]; skipped = 0; ignored = 0
+        counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; skipped = 0; ignored = 0
         problems = []; hints = []; dupForAll = nil; askedCameras = [:]
     }
 
@@ -280,6 +281,15 @@ final class Sorter: ObservableObject {
                     phase = .cancelled; return
                 }
                 var target = job.dir.appendingPathComponent("Videos").appendingPathComponent(cam)
+                if store.sortByLens {
+                    if let lens = await lensName(for: job.url, asset: asset, siblings: siblings[job.dir] ?? []) {
+                        target = target.appendingPathComponent(lens)
+                        lenses[lens, default: 0] += 1
+                    } else {
+                        target = target.appendingPathComponent("Objektiv unbekannt")
+                        lenses["Objektiv unbekannt", default: 0] += 1
+                    }
+                }
                 if let o { target = target.appendingPathComponent(o) }
                 else { hints.append("\(job.url.lastPathComponent): Ausrichtung nicht lesbar – liegt direkt in Videos/\(cam)") }
                 if await move(job.url, to: target) {
@@ -463,6 +473,35 @@ final class Sorter: ObservableObject {
         if !md.isEmpty, md.lowercased().hasPrefix(mk.lowercased()) { return Self.clean(md) }
         let brand = mk.prefix(1).uppercased() + mk.dropFirst()
         return Self.clean("\(brand) \(md)")
+    }
+
+    // MARK: Objektiv
+
+    private func lensName(for url: URL, asset: AVURLAsset, siblings: Set<String>) async -> String? {
+        let stem = url.deletingPathExtension().lastPathComponent
+        // Sony: <Lens modelName="…"> in Begleit-XML oder eingebettet
+        for x in [stem + "M01.XML", stem + "M01.xml"] where siblings.contains(x) {
+            if let s = try? String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(x), encoding: .utf8),
+               let l = Self.lens(fromXML: s) { return l }
+        }
+        if let s = String(data: headTail(url), encoding: .isoLatin1), let l = Self.lens(fromXML: s) { return l }
+        // Andere Kameras/Handys: Objektiv-Angabe in den Metadaten, falls vorhanden
+        if let items = try? await asset.load(.metadata) {
+            for item in items {
+                let key = (item.identifier?.rawValue ?? "").lowercased()
+                guard key.contains("lens"), let v = try? await item.load(.stringValue), !v.isEmpty else { continue }
+                return Self.clean(v)
+            }
+        }
+        return nil
+    }
+
+    static func lens(fromXML s: String) -> String? {
+        guard let tagR = s.range(of: #"<Lens[^>]*>"#, options: .regularExpression) else { return nil }
+        let tag = String(s[tagR])
+        guard let r = tag.range(of: #"modelName="[^"]+""#, options: .regularExpression) else { return nil }
+        let raw = String(tag[r].dropFirst("modelName=\"".count).dropLast()).trimmingCharacters(in: .whitespaces)
+        return raw.isEmpty ? nil : clean(raw)
     }
 
     // MARK: Hilfen

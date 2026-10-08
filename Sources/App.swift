@@ -199,6 +199,8 @@ struct IdleView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
                 Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
+                Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
+                    .help("Videos/<Kamera>/<Objektiv>/Hochkant|Quer – klappt, wenn die Kamera das Objektiv speichert (z. B. Sony)")
             }
             .toggleStyle(.switch).controlSize(.small)
             .font(.system(size: 12, weight: .medium))
@@ -348,6 +350,9 @@ struct DoneView: View {
                     if !sorter.cameras.isEmpty {
                         FlowChips(items: sorter.cameras.sorted { $0.value > $1.value }.map { ($0.key, $0.value) })
                     }
+                    if !sorter.lenses.isEmpty {
+                        FlowChips(items: sorter.lenses.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }, icon: "camera.aperture")
+                    }
 
                     if hasProblems { MessageBox(title: plural(sorter.problems.count, "Datei", "Dateien") + " nicht verschoben",
                                                 lines: sorter.problems,
@@ -388,11 +393,12 @@ func plural(_ n: Int, _ one: String, _ many: String) -> String { "\(n) \(n == 1 
 
 struct FlowChips: View {
     let items: [(String, Int)]
+    var icon: String? = nil
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 8)], spacing: 8) {
             ForEach(items, id: \.0) { cam in
                 HStack(spacing: 5) {
-                    Image(systemName: cam.0 == "iPhone" ? "iphone" : cam.0 == "Unbekannt" ? "questionmark.circle" : "camera.fill")
+                    Image(systemName: icon ?? (cam.0 == "iPhone" ? "iphone" : cam.0 == "Unbekannt" ? "questionmark.circle" : "camera.fill"))
                     Text("\(cam.0)  \(cam.1)").lineLimit(1)
                 }
                 .font(.system(size: 12, weight: .semibold))

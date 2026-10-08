@@ -40,11 +40,13 @@ final class LearnedStore: ObservableObject {
     @Published private(set) var extensions: [String: FileCategory] = [:]
     @Published var confirmCameras: Bool { didSet { d.set(confirmCameras, forKey: "confirmCameras") } }
     @Published var includeSubfolders: Bool { didSet { d.set(includeSubfolders, forKey: "includeSubfolders") } }
+    @Published var sortByLens: Bool { didSet { d.set(sortByLens, forKey: "sortByLens") } }
 
     private let d = UserDefaults.standard
     init() {
         confirmCameras = d.object(forKey: "confirmCameras") as? Bool ?? true
         includeSubfolders = d.object(forKey: "includeSubfolders") as? Bool ?? true
+        sortByLens = d.object(forKey: "sortByLens") as? Bool ?? false
         if let data = d.data(forKey: "cameraRules2"), let r = try? JSONDecoder().decode([CameraRule].self, from: data) { rules = r }
         if let data = d.data(forKey: "extensions2"), let e = try? JSONDecoder().decode([String: FileCategory].self, from: data) { extensions = e }
     }
