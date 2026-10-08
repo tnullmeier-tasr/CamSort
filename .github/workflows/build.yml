@@ -1,0 +1,25 @@
+name: Build CamSort
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CamSort
+          path: build/CamSort.zip
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v1.0.${{ github.run_number }}" build/CamSort.zip \
+            --title "CamSort 1.0 (Build ${{ github.run_number }})" \
+            --notes "CamSort.zip herunterladen, entpacken, CamSort in den Programme-Ordner ziehen."
