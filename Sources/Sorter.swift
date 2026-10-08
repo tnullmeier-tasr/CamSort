@@ -70,6 +70,7 @@ final class Sorter: ObservableObject {
     @Published var sideCounts: [String: Int] = [:]
     @Published var cameras: [String: Int] = [:]
     @Published var lenses: [String: Int] = [:]
+    @Published var speeds: [String: Int] = [:]
     @Published var skipped = 0
     @Published var ignored = 0
     @Published var problems: [String] = []
@@ -123,7 +124,7 @@ final class Sorter: ObservableObject {
     }
 
     private func clearResults() {
-        counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; skipped = 0; ignored = 0
+        counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; speeds = [:]; skipped = 0; ignored = 0
         problems = []; hints = []; dupForAll = nil; askedCameras = [:]
     }
 
@@ -288,6 +289,19 @@ final class Sorter: ObservableObject {
                     } else {
                         target = target.appendingPathComponent("Objektiv unbekannt")
                         lenses["Objektiv unbekannt", default: 0] += 1
+                    }
+                }
+                if store.droneBySpeed {
+                    let stem = job.url.deletingPathExtension().lastPathComponent
+                    let srt = [stem + ".SRT", stem + ".srt"].first { (siblings[job.dir] ?? []).contains($0) }
+                    if let srt, let kmh = SRTSpeed.averageKmh(job.dir.appendingPathComponent(srt)) {
+                        let folder: String
+                        if kmh >= store.standMin && kmh <= store.standMax { folder = "Stand" }
+                        else if kmh >= store.moveMin && kmh <= store.moveMax { folder = "Fahrt" }
+                        else { folder = "Dazwischen" }
+                        target = target.appendingPathComponent(folder)
+                        speeds[folder, default: 0] += 1
+                        hints.append(String(format: "%@: Ø %.1f km/h → %@", job.url.lastPathComponent, kmh, folder))
                     }
                 }
                 if let o { target = target.appendingPathComponent(o) }

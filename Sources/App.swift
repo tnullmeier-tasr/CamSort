@@ -137,6 +137,16 @@ struct Header: View {
 struct IdleView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var store: LearnedStore
+    @State private var showSettings = false
+
+    private var settingsSummary: String {
+        var p: [String] = []
+        p.append(store.includeSubfolders ? "mit Unterordnern" : "ohne Unterordner")
+        if store.confirmCameras { p.append("Kameras nachfragen") }
+        if store.sortByLens { p.append("nach Objektiv") }
+        if store.droneBySpeed { p.append("Drohne: Stand/Fahrt") }
+        return "Einstellungen: " + p.joined(separator: " · ")
+    }
     @State private var pulse = false
     @State private var targeted = false
 
@@ -196,15 +206,19 @@ struct IdleView: View {
                 .frame(maxHeight: 140)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
-                Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
-                Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
-                    .help("Videos/<Kamera>/<Objektiv>/Hochkant|Quer – klappt, wenn die Kamera das Objektiv speichert (z. B. Sony)")
+            Button { showSettings = true } label: {
+                HStack {
+                    Image(systemName: "gearshape.fill")
+                    Text(settingsSummary).lineLimit(2).multilineTextAlignment(.leading)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.4))
+                }
+                .font(.system(size: 12, weight: .medium))
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
             }
-            .toggleStyle(.switch).controlSize(.small)
-            .font(.system(size: 12, weight: .medium))
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
 
             Spacer(minLength: 0)
 
@@ -349,6 +363,9 @@ struct DoneView: View {
 
                     if !sorter.cameras.isEmpty {
                         FlowChips(items: sorter.cameras.sorted { $0.value > $1.value }.map { ($0.key, $0.value) })
+                    }
+                    if !sorter.speeds.isEmpty {
+                        FlowChips(items: sorter.speeds.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }, icon: "speedometer")
                     }
                     if !sorter.lenses.isEmpty {
                         FlowChips(items: sorter.lenses.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }, icon: "camera.aperture")
@@ -629,5 +646,59 @@ struct LearnedView: View {
         }
         .padding(22)
         .frame(width: 480)
+    }
+}
+
+
+// MARK: - Einstellungen
+
+struct SettingsView: View {
+    @EnvironmentObject var store: LearnedStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Einstellungen").font(.title2.bold())
+            Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
+            Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
+            Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
+            Text("Klappt, wenn die Kamera das Objektiv speichert (z. B. Sony).")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Divider()
+            Toggle("Drohnen-Clips nach Geschwindigkeit sortieren", isOn: $store.droneBySpeed.animation())
+            Text("Berechnet pro Clip die Ø-Geschwindigkeit aus der SRT-Datei und legt Unterordner „Stand“, „Fahrt“ bzw. „Dazwischen“ an.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            if store.droneBySpeed {
+                SpeedRange(title: "Stand", icon: "pause.circle.fill", min: $store.standMin, max: $store.standMax, limit: 30)
+                SpeedRange(title: "Fahrt", icon: "airplane", min: $store.moveMin, max: $store.moveMax, limit: 150)
+            }
+            HStack { Spacer(); Button("Fertig") { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .toggleStyle(.switch)
+        .padding(22)
+        .frame(width: 440)
+    }
+}
+
+struct SpeedRange: View {
+    let title: String
+    let icon: String
+    @Binding var min: Double
+    @Binding var max: Double
+    let limit: Double
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("\(title): \(Int(min)) – \(Int(max)) km/h", systemImage: icon).font(.system(size: 13, weight: .semibold))
+            HStack {
+                Text("von").font(.system(size: 11)).frame(width: 26, alignment: .leading)
+                Slider(value: Binding(get: { min }, set: { min = Swift.min($0, max) }), in: 0...limit, step: 1)
+            }
+            HStack {
+                Text("bis").font(.system(size: 11)).frame(width: 26, alignment: .leading)
+                Slider(value: Binding(get: { max }, set: { max = Swift.max($0, min) }), in: 0...limit, step: 1)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
     }
 }

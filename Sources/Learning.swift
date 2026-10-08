@@ -41,12 +41,22 @@ final class LearnedStore: ObservableObject {
     @Published var confirmCameras: Bool { didSet { d.set(confirmCameras, forKey: "confirmCameras") } }
     @Published var includeSubfolders: Bool { didSet { d.set(includeSubfolders, forKey: "includeSubfolders") } }
     @Published var sortByLens: Bool { didSet { d.set(sortByLens, forKey: "sortByLens") } }
+    @Published var droneBySpeed: Bool { didSet { d.set(droneBySpeed, forKey: "droneBySpeed") } }
+    @Published var standMin: Double { didSet { d.set(standMin, forKey: "standMin") } }
+    @Published var standMax: Double { didSet { d.set(standMax, forKey: "standMax") } }
+    @Published var moveMin: Double { didSet { d.set(moveMin, forKey: "moveMin") } }
+    @Published var moveMax: Double { didSet { d.set(moveMax, forKey: "moveMax") } }
 
     private let d = UserDefaults.standard
     init() {
         confirmCameras = d.object(forKey: "confirmCameras") as? Bool ?? true
         includeSubfolders = d.object(forKey: "includeSubfolders") as? Bool ?? true
         sortByLens = d.object(forKey: "sortByLens") as? Bool ?? false
+        droneBySpeed = d.object(forKey: "droneBySpeed") as? Bool ?? false
+        standMin = d.object(forKey: "standMin") as? Double ?? 0
+        standMax = d.object(forKey: "standMax") as? Double ?? 3
+        moveMin = d.object(forKey: "moveMin") as? Double ?? 5
+        moveMax = d.object(forKey: "moveMax") as? Double ?? 100
         if let data = d.data(forKey: "cameraRules2"), let r = try? JSONDecoder().decode([CameraRule].self, from: data) { rules = r }
         if let data = d.data(forKey: "extensions2"), let e = try? JSONDecoder().decode([String: FileCategory].self, from: data) { extensions = e }
     }
