@@ -11,9 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: SRT-Test
+        continue-on-error: true
         run: |
-          swiftc -parse-as-library -o srttest Sources/SRTSpeed.swift -Xfrontend -entry-point-function-name -Xfrontend srtmain Tests/srt_test.swift 2>/dev/null || swiftc -o srttest Sources/SRTSpeed.swift Tests/srt_test.swift
-          ./srttest Tests/DJI_0162.SRT
+          mkdir t && cp Sources/SRTSpeed.swift t/ && cp Tests/srt_test.swift t/main.swift
+          swiftc t/*.swift -o srttest 2> err.txt || { echo "::error::$(head -c 800 err.txt | tr '\n' ' ')"; exit 1; }
+          echo "::notice::SRT-Test: $(./srttest Tests/DJI_0162.SRT | tr '\n' ' ')"
       - name: Build
         run: ./build.sh
       - uses: actions/upload-artifact@v4

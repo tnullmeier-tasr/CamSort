@@ -92,6 +92,7 @@ final class Sorter: ObservableObject {
     static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer"]
 
     private var dupForAll: DupChoice?
+    @Published var skipAsking = false   // „Lernen überspringen“ für diesen Durchlauf
     private var askedCameras: [String: String] = [:]
     private var task: Task<Void, Never>?
     private let fm = FileManager.default
@@ -125,7 +126,7 @@ final class Sorter: ObservableObject {
 
     private func clearResults() {
         counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; speeds = [:]; skipped = 0; ignored = 0
-        problems = []; hints = []; dupForAll = nil; askedCameras = [:]
+        problems = []; hints = []; dupForAll = nil; skipAsking = false; askedCameras = [:]
     }
 
     func start() {
@@ -154,6 +155,15 @@ final class Sorter: ObservableObject {
         let clean = name.map { Self.clean($0) }.flatMap { $0.isEmpty ? nil : $0 }
         if let c = clean, remember { store.learn(signature: p.signature, label: p.signatureLabel, camera: c) }
         p.continuation.resume(returning: clean)
+    }
+
+    /// Nicht mehr nachfragen – Rest nach bisherigem Wissen sortieren.
+    func skipLearning() {
+        skipAsking = true
+        if let p = pendingCamera {
+            pendingCamera = nil
+            p.continuation.resume(returning: p.suggestion.isEmpty ? nil : p.suggestion)
+        }
     }
 
     func answerExtensions(_ map: [String: FileCategory]?, remember: Bool) {
@@ -397,7 +407,9 @@ final class Sorter: ObservableObject {
         if let learned = store.camera(for: det.signature) { return learned }
         // 2) Sicher erkannt und keine Bestätigung gewünscht
         if let n = det.name, !store.confirmCameras { return n }
-        // 3) In diesem Durchlauf schon beantwortet
+        // 3) Lernen übersprungen → bestes Wissen
+        if skipAsking { return det.name ?? "Unbekannt" }
+        // 3b) In diesem Durchlauf schon beantwortet
         if let a = askedCameras[det.signature] { return a }
         // 4) Nachfragen
         let answer: String? = await withCheckedContinuation { c in

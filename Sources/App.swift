@@ -534,6 +534,14 @@ struct CameraSheet: View {
             }
             Toggle("Merken – künftig automatisch so einsortieren (\(request.signatureLabel))", isOn: $remember)
                 .font(.system(size: 11))
+            Button {
+                sorter.skipLearning()
+            } label: {
+                Label("Nicht mehr fragen – Rest nach bestem Wissen sortieren", systemImage: "forward.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .help("Für diesen Durchlauf keine Rückfragen mehr. Bekannte Kameras werden normal sortiert, unbekannte landen in „Unbekannt“.")
             HStack {
                 Button(request.suggestion.isEmpty ? "Als „Unbekannt“ einsortieren" : "Diesmal nicht merken") { sorter.answerCamera(request.suggestion.isEmpty ? nil : request.suggestion, remember: false) }
                 Spacer()
