@@ -16,6 +16,26 @@ jobs:
           mkdir t && cp Sources/SRTSpeed.swift t/ && cp Tests/srt_test.swift t/main.swift
           swiftc t/*.swift -o srttest 2> err.txt || { echo "::error::$(head -c 800 err.txt | tr '\n' ' ')"; exit 1; }
           echo "::notice::SRT-Test: $(./srttest Tests/DJI_0162.SRT | tr '\n' ' ')"
+      - name: Gyroflow-CLI-Test
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download -R gyroflow/gyroflow -p '*mac*.dmg' -O gf.dmg || { echo "::warning::Gyroflow-Download fehlgeschlagen"; exit 0; }
+          hdiutil attach gf.dmg -nobrowse -mountpoint /tmp/gf >/dev/null
+          APP=$(ls -d /tmp/gf/*.app | head -1)
+          EXE=$(ls "$APP/Contents/MacOS/" | head -5 | tr '\n' ' ')
+          echo "::notice::Gyroflow-App: $APP – Programme: $EXE"
+          BIN="$APP/Contents/MacOS/$(ls "$APP/Contents/MacOS/" | grep -i gyroflow | head -1)"
+          H=$("$BIN" --help < /dev/null 2>&1 | grep -E -- '--preset|-t,|--stdout-progress|-f,|--overwrite' | tr '\n' '|' | head -c 900)
+          echo "::notice::CLI-Optionen: $H"
+          # Rendertest mit synthetischem Clip ohne Gyro-Daten: Erwartet sauberes Ende ohne Hängen
+          ffmpeg -loglevel error -f lavfi -i testsrc=size=640x360:rate=25 -t 2 -pix_fmt yuv420p test.mp4 2>/dev/null || true
+          if [ -f test.mp4 ]; then
+            timeout 120 "$BIN" "$PWD/test.mp4" -t _stabilized -f --stdout-progress < /dev/null > out.txt 2>&1; RC=$?
+            echo "::notice::Rendertest Exitcode $RC, Ausgabe: $(tail -c 600 out.txt | tr '\n' ' ')"
+            ls test_stabilized* 2>/dev/null && echo "::notice::Ausgabedatei erzeugt"
+          fi
       - name: Build
         run: ./build.sh
       - uses: actions/upload-artifact@v4

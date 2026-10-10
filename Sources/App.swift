@@ -7,11 +7,14 @@ struct CamSortApp: App {
     @StateObject private var store: LearnedStore
     @StateObject private var sorter: Sorter
     @StateObject private var theme = ThemeSettings()
+    @StateObject private var gyro: GyroRunner
 
     init() {
         let s = LearnedStore()
+        let so = Sorter(store: s)
         _store = StateObject(wrappedValue: s)
-        _sorter = StateObject(wrappedValue: Sorter(store: s))
+        _sorter = StateObject(wrappedValue: so)
+        _gyro = StateObject(wrappedValue: GyroRunner(store: s, sorter: so))
     }
 
     var body: some Scene {
@@ -20,6 +23,7 @@ struct CamSortApp: App {
                 .environmentObject(sorter)
                 .environmentObject(store)
                 .environmentObject(theme)
+                .environmentObject(gyro)
                 .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
@@ -47,6 +51,7 @@ struct ContentView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var store: LearnedStore
     @EnvironmentObject var theme: ThemeSettings
+    @EnvironmentObject var gyro: GyroRunner
 
     var body: some View {
         ZStack {
@@ -56,10 +61,14 @@ struct ContentView: View {
                 Header()
                     .padding(.top, 34)
                 Group {
-                    switch sorter.phase {
-                    case .idle: IdleView()
-                    case .scanning, .sorting: SortingView()
-                    case .done, .cancelled: DoneView()
+                    if gyro.active {
+                        GyroView()
+                    } else {
+                        switch sorter.phase {
+                        case .idle: IdleView()
+                        case .scanning, .sorting: SortingView()
+                        case .done, .cancelled: DoneView()
+                        }
                     }
                 }
                 .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.96)),
@@ -71,6 +80,7 @@ struct ContentView: View {
         }
         .foregroundStyle(.white)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: sorter.phase)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: gyro.active)
         .sheet(item: $sorter.pendingDuplicate) { req in
             DuplicateSheet(request: req).environmentObject(sorter)
         }
@@ -340,6 +350,7 @@ struct CountGrid: View {
 
 struct DoneView: View {
     @EnvironmentObject var sorter: Sorter
+    @EnvironmentObject var gyro: GyroRunner
     @State private var pop = false
     @State private var showProblems = true
 
@@ -388,6 +399,20 @@ struct DoneView: View {
                                                           color: Theme.mint, open: .constant(true)) }
                 }
                 .padding(.bottom, 6)
+            }
+
+            if !cancelled {
+                HStack(spacing: 8) {
+                    Button { gyro.start(folders: sorter.folders) } label: {
+                        Label("Sony-Clips mit Gyroflow stabilisieren", systemImage: "gyroscope")
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .background(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.mint, lineWidth: 1.5))
+                            .foregroundStyle(Theme.mint)
+                    }.buttonStyle(.plain)
+                    HelpButton(title: "Mit Gyroflow stabilisieren",
+                               text: "Schickt alle noch nicht stabilisierten Sony-Clips aus den Ordnern Hochkant und Quer an Gyroflow – einzeln nacheinander, zuerst alle Hochkant-, dann alle Quer-Clips. Gyroflow arbeitet dabei im Hintergrund mit deinem hinterlegten Preset (Einstellungen › Gyroflow). Du kannst jederzeit pausieren oder abbrechen. Wenn Gyroflow fertig ist, trennt CamSort automatisch in „Stabilisiert“ und „Original“.")
+                }
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
 
             HStack(spacing: 12) {
@@ -673,32 +698,125 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Einstellungen").font(.title2.bold())
-            Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
-            Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
-            Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
-            Text("Klappt, wenn die Kamera das Objektiv speichert (z. B. Sony).")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            Divider()
-            Toggle("Gyroflow-Clips automatisch trennen (Stabilisiert / Original)", isOn: $store.autoGyro)
-            TextField("Endungen stabilisierter Dateien", text: $store.gyroSuffixes)
-                .textFieldStyle(.roundedBorder)
-            Text("Kommagetrennt. Clips, deren Name eine dieser Endungen enthält, gelten als stabilisiert.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            Divider()
-            Toggle("Drohnen-Clips nach Geschwindigkeit sortieren", isOn: $store.droneBySpeed.animation())
-            Text("Berechnet pro Clip die Ø-Geschwindigkeit aus der SRT-Datei und legt Unterordner „Stand“, „Fahrt“ bzw. „Dazwischen“ an.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            if store.droneBySpeed {
-                SpeedRange(title: "Stand", icon: "pause.circle.fill", min: $store.standMin, max: $store.standMax, limit: 30)
-                SpeedRange(title: "Fahrt", icon: "airplane", min: $store.moveMin, max: $store.moveMax, limit: 150)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Einstellungen").font(.title2.bold()).padding(.bottom, 10)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    section("Sortieren")
+                    WithHelp(title: "Unterordner durchsuchen", text: "An: CamSort schaut auch in alle Unterordner des gewählten Ordners und sortiert jede Datei in dem Ordner ein, in dem sie liegt. Ordner, die CamSort selbst angelegt hat (Videos, Fotos, XML …), werden dabei übersprungen.\nAus: Nur Dateien, die direkt im gewählten Ordner liegen, werden sortiert.") {
+                        Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
+                    }
+                    WithHelp(title: "Kameras nachfragen", text: "An: Bei jeder neuen Kamera fragt CamSort einmal, unter welchem Namen sie einsortiert werden soll, und merkt sich die Antwort dauerhaft (siehe „Gelernt“ oben rechts).\nAus: Erkannte Kameras werden ohne Rückfrage einsortiert, unbekannte landen in „Unbekannt“.") {
+                        Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
+                    }
+                    WithHelp(title: "Nach Objektiv sortieren", text: "Legt unter jeder Kamera einen zusätzlichen Ordner pro Objektiv an, z. B. Videos/Sony Alpha 1/FE 24-70mm F2.8 GM II/Quer. Klappt nur, wenn die Kamera das Objektiv mitspeichert – bei Sony zuverlässig. Clips ohne Objektiv-Angabe landen in „Objektiv unbekannt“.") {
+                        Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
+                    }
+
+                    section("Gyroflow")
+                    GyroPresetBox()
+                    WithHelp(title: "Gyroflow-App", text: "CamSort sucht Gyroflow automatisch im Programme-Ordner. Nur falls Gyroflow woanders liegt, hier die Gyroflow-App auswählen.") {
+                        HStack {
+                            Text(store.gyroAppPath.isEmpty ? "Gyroflow-App: automatisch (Programme-Ordner)" : "Gyroflow-App: " + (store.gyroAppPath as NSString).lastPathComponent)
+                                .font(.system(size: 12)).lineLimit(1)
+                            Spacer()
+                            Button("Wählen …") {
+                                let p = NSOpenPanel()
+                                p.allowedContentTypes = [.application]
+                                p.directoryURL = URL(fileURLWithPath: "/Applications")
+                                if p.runModal() == .OK, let u = p.url { store.gyroAppPath = u.path }
+                            }.controlSize(.small)
+                        }
+                    }
+                    WithHelp(title: "Automatisch trennen", text: "Bei jedem Sortier-Durchlauf schaut CamSort zusätzlich nach, ob Gyroflow irgendwo stabilisierte Clips erzeugt hat, und trennt dort in „Stabilisiert“, „Original“ und „Gyroflow-Projekte“. Ordner ohne stabilisierte Clips bleiben unverändert.") {
+                        Toggle("Gyroflow-Clips automatisch trennen", isOn: $store.autoGyro)
+                    }
+                    WithHelp(title: "Endungen stabilisierter Dateien", text: "Daran erkennt CamSort, welche Clips von Gyroflow stammen: Enthält der Dateiname eine dieser Endungen, gilt er als stabilisiert. Mehrere Endungen mit Komma trennen. Die erste Endung verwendet CamSort auch selbst, wenn es Gyroflow rendern lässt.") {
+                        TextField("Endungen stabilisierter Dateien", text: $store.gyroSuffixes).textFieldStyle(.roundedBorder)
+                    }
+
+                    section("Drohne")
+                    WithHelp(title: "Nach Geschwindigkeit sortieren", text: "CamSort liest die SRT-Datei jedes Drohnen-Clips, berechnet aus den GPS-Positionen die Durchschnittsgeschwindigkeit und legt Ordner „Stand“, „Fahrt“ oder „Dazwischen“ an. Clips ohne GPS-Signal landen in „Ohne GPS“. Die Bereiche stellst du mit den Reglern ein.") {
+                        Toggle("Drohnen-Clips nach Geschwindigkeit sortieren", isOn: $store.droneBySpeed.animation())
+                    }
+                    if store.droneBySpeed {
+                        SpeedRange(title: "Stand", icon: "pause.circle.fill", min: $store.standMin, max: $store.standMax, limit: 30)
+                        SpeedRange(title: "Fahrt", icon: "airplane", min: $store.moveMin, max: $store.moveMax, limit: 150)
+                    }
+                }
+                .padding(.trailing, 6)
             }
-            HStack { Spacer(); Button("Fertig") { dismiss() }.keyboardShortcut(.defaultAction) }
+            HStack { Spacer(); Button("Fertig") { dismiss() }.keyboardShortcut(.defaultAction) }.padding(.top, 10)
         }
         .toggleStyle(.switch)
         .padding(22)
-        .frame(width: 440)
+        .frame(width: 480, height: 620)
+    }
+
+    private func section(_ t: String) -> some View {
+        Text(t.uppercased()).font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary).padding(.top, 6)
+    }
+}
+
+struct GyroPresetBox: View {
+    @EnvironmentObject var store: LearnedStore
+    @State private var showGuide = false
+    private var ok: Bool { !store.gyroPresetPath.isEmpty && FileManager.default.fileExists(atPath: store.gyroPresetPath) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(ok ? .green : .orange)
+                Text(ok ? "Preset: " + (store.gyroPresetPath as NSString).lastPathComponent : "Noch kein Gyroflow-Preset hinterlegt")
+                    .font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                Spacer()
+                HelpButton(title: "Gyroflow-Preset", text: "Das Preset ist eine kleine Datei (Endung .gyroflow), in der deine gewohnten Gyroflow-Einstellungen stehen – Objektivprofil, Glättung, Export-Format. CamSort gibt sie beim Stabilisieren an Gyroflow weiter, damit alles genauso gerendert wird wie bei dir von Hand. An deinen Einstellungen in Gyroflow ändert sich nichts.")
+            }
+            HStack {
+                Button(ok ? "Anderes Preset wählen …" : "Preset-Datei wählen …") { choose() }
+                Button(showGuide ? "Anleitung ausblenden" : "Wie bekomme ich das Preset?") { withAnimation { showGuide.toggle() } }
+                    .buttonStyle(.link)
+            }
+            .controlSize(.small)
+            if showGuide || !ok {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("So legst du das Preset an (einmalig, ca. 1 Minute):").font(.system(size: 11, weight: .semibold))
+                    step(1, "Gyroflow öffnen und einen Sony-Clip hineinziehen.")
+                    step(2, "Kontrollieren, dass alles so eingestellt ist wie immer (Objektivprofil, Glättung, Export-Einstellungen).")
+                    step(3, "Unten rechts auf den kleinen Pfeil am Knopf „Export“ klicken und „Create settings preset“ (Einstellungs-Preset erstellen) wählen.")
+                    step(4, "Im folgenden Fenster alle Haken setzen – besonders bei den Export-/Ausgabe-Einstellungen (Codec, Bitrate). Dann fragt Gyroflow später nicht mehr pro Datei nach.")
+                    step(5, "Datei z. B. als „Sony.gyroflow“ an einem festen Ort speichern, etwa im Ordner Dokumente.")
+                    step(6, "Hier in CamSort auf „Preset-Datei wählen …“ klicken und genau diese Datei auswählen.")
+                    Text("Wichtig: Datei danach nicht verschieben oder löschen – CamSort greift bei jedem Stabilisieren darauf zu. Ändern sich deine Einstellungen, einfach neu speichern (gleicher Name überschreibt).")
+                        .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).strokeBorder(ok ? Color.green.opacity(0.4) : Color.orange.opacity(0.6)))
+    }
+
+    private func step(_ n: Int, _ t: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(n).").font(.system(size: 11, weight: .bold)).frame(width: 14, alignment: .trailing)
+            Text(t).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func choose() {
+        let p = NSOpenPanel()
+        p.canChooseFiles = true; p.canChooseDirectories = false; p.allowsMultipleSelection = false
+        p.message = "Gyroflow-Preset (.gyroflow) auswählen"
+        if p.runModal() == .OK, let u = p.url {
+            if u.pathExtension.lowercased() == "gyroflow" { store.gyroPresetPath = u.path }
+            else {
+                let a = NSAlert(); a.messageText = "Das ist keine Gyroflow-Preset-Datei"
+                a.informativeText = "Bitte eine Datei mit der Endung .gyroflow wählen."; a.runModal()
+            }
+        }
     }
 }
 
