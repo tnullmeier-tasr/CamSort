@@ -49,6 +49,7 @@ final class LearnedStore: ObservableObject {
     @Published var gyroPresetPath: String { didSet { d.set(gyroPresetPath, forKey: "gyroPresetPath") } }
     @Published var gyroAppPath: String { didSet { d.set(gyroAppPath, forKey: "gyroAppPath") } }
     @Published var showGyroButton: Bool { didSet { d.set(showGyroButton, forKey: "showGyroButton") } }
+    @Published var enableTagging: Bool { didSet { d.set(enableTagging, forKey: "enableTagging") } }
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
     var gyroSuffixList: [String] {
@@ -66,6 +67,7 @@ final class LearnedStore: ObservableObject {
         moveMin = d.object(forKey: "moveMin") as? Double ?? 5
         moveMax = d.object(forKey: "moveMax") as? Double ?? 100
         autoGyro = d.object(forKey: "autoGyro") as? Bool ?? true
+        enableTagging = d.object(forKey: "enableTagging") as? Bool ?? false
         showGyroButton = d.object(forKey: "showGyroButton") as? Bool ?? true
         gyroPresetPath = d.string(forKey: "gyroPresetPath") ?? ""
         gyroAppPath = d.string(forKey: "gyroAppPath") ?? ""

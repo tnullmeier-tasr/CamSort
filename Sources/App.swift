@@ -10,6 +10,7 @@ struct CamSortApp: App {
     @StateObject private var sorter: Sorter
     @StateObject private var theme = ThemeSettings()
     @StateObject private var gyro: GyroRunner
+    @StateObject private var tagger = TagRunner()
 
     init() {
         let s = LearnedStore()
@@ -26,6 +27,7 @@ struct CamSortApp: App {
                 .environmentObject(store)
                 .environmentObject(theme)
                 .environmentObject(gyro)
+                .environmentObject(tagger)
                 .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
@@ -54,6 +56,7 @@ struct ContentView: View {
     @EnvironmentObject var store: LearnedStore
     @EnvironmentObject var theme: ThemeSettings
     @EnvironmentObject var gyro: GyroRunner
+    @EnvironmentObject var tagger: TagRunner
 
     var body: some View {
         ZStack {
@@ -65,6 +68,8 @@ struct ContentView: View {
                 Group {
                     if gyro.active {
                         GyroView()
+                    } else if tagger.active {
+                        TagView()
                     } else {
                         switch sorter.phase {
                         case .idle: IdleView()
@@ -83,6 +88,7 @@ struct ContentView: View {
         .foregroundStyle(.white)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: sorter.phase)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: gyro.active)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: tagger.active)
         .sheet(item: $sorter.pendingDuplicate) { req in
             DuplicateSheet(request: req).environmentObject(sorter)
         }
@@ -379,6 +385,7 @@ struct CountGrid: View {
 struct DoneView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var gyro: GyroRunner
+    @EnvironmentObject var tagger: TagRunner
     @EnvironmentObject var store: LearnedStore
     @State private var pop = false
     @State private var showProblems = true
@@ -430,6 +437,19 @@ struct DoneView: View {
                 .padding(.bottom, 6)
             }
 
+            if !cancelled && store.enableTagging {
+                HStack(spacing: 8) {
+                    Button { tagger.start(folders: sorter.folders) } label: {
+                        Label("Clips verschlagworten (Finder-Tags)", systemImage: "tag.fill")
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .background(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.orange, lineWidth: 1.5))
+                            .foregroundStyle(Theme.orange)
+                    }.buttonStyle(.plain)
+                    HelpButton(title: "Clips verschlagworten",
+                               text: "CamSort schaut sich jeden Clip in den Videos-Ordnern an (ein Standbild alle ~3 Sekunden) und erkennt lokal auf deinem Mac, was zu sehen ist – z. B. Person, Auto, Motorrad, Straße. Zusätzlich liest es Schriftzüge im Bild und erkennt so Automarken wie Porsche, BMW oder Maserati, wenn der Name lesbar ist.\n\nDie Begriffe werden als Finder-Tags ergänzt. Vorhandene Tags bleiben, die Videodatei selbst wird nicht verändert. Dauert je nach Menge einige Minuten; Pause ist jederzeit möglich.")
+                }
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+            }
             if !cancelled && store.showGyroButton {
                 HStack(spacing: 8) {
                     Button { gyro.start(folders: sorter.folders) } label: {
@@ -740,6 +760,11 @@ struct SettingsView: View {
                     }
                     WithHelp(title: "Nach Objektiv sortieren", text: "Legt unter jeder Kamera einen zusätzlichen Ordner pro Objektiv an, z. B. Videos/Sony Alpha 1/FE 24-70mm F2.8 GM II/Quer. Klappt nur, wenn die Kamera das Objektiv mitspeichert – bei Sony zuverlässig. Clips ohne Objektiv-Angabe landen in „Objektiv unbekannt“.") {
                         Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
+                    }
+
+                    section("Verschlagworten")
+                    WithHelp(title: "Verschlagworten aktivieren", text: "An: Nach dem Sortieren erscheint der Knopf „Clips verschlagworten“. CamSort erkennt dann lokal und offline, was in den Clips zu sehen ist (Person, Auto, Motorrad, Straße …), liest Schriftzüge und erkennt so Automarken, und ergänzt alles als Finder-Tags. Die Videodateien werden dabei nicht verändert.\n\nIn Final Cut beim Import „Finder-Tags als Schlagwörter“ anhaken, dann stehen die Begriffe dort direkt als Schlagwörter bereit.\n\nAus: Kein Knopf, keine Analyse.") {
+                        Toggle("Clips verschlagworten (Finder-Tags)", isOn: $store.enableTagging)
                     }
 
                     section("Gyroflow")
