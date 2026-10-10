@@ -87,9 +87,9 @@ final class Sorter: ObservableObject {
     static let musicExt: Set<String> = ["mp3", "wav", "aac", "m4a", "aif", "aiff", "flac", "ogg", "opus", "wma", "caf"]
     static let archiveExt: Set<String> = ["zip", "rar", "7z", "tar", "gz", "tgz"]
     static let projectExt: Set<String> = ["fcpbundle", "fcpxml", "fcpxmld", "fcpxd"]
-    static let sideExt: Set<String> = ["xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
+    static let sideExt: Set<String> = ["gyroflow", "xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
     static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini", "localized"]
-    static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer"]
+    static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer", "Stabilisiert", "Original", "Gyroflow-Projekte"]
 
     private var dupForAll: DupChoice?
     @Published var skipAsking = false   // „Lernen überspringen“ für diesen Durchlauf
@@ -134,6 +134,69 @@ final class Sorter: ObservableObject {
         clearResults(); processed = 0
         phase = .scanning
         task = Task { await run() }
+    }
+
+    /// Schritt 2: nach Gyroflow stabilisierte und unstabilisierte Clips trennen.
+    func startGyro() {
+        guard !folders.isEmpty else { return }
+        clearResults(); processed = 0
+        phase = .scanning
+        task = Task { await runGyro() }
+    }
+
+    private func runGyro() async {
+        let suffixes = store.gyroSuffixList
+        func isStabilized(_ u: URL) -> Bool {
+            let stem = u.deletingPathExtension().lastPathComponent.lowercased()
+            return suffixes.contains { stem.contains($0) }
+        }
+        let skipDirs: Set<String> = ["Stabilisiert", "Original", "Gyroflow-Projekte"]
+        var byDir: [URL: [URL]] = [:]
+        for base in folders {
+            guard let en = fm.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
+                                         options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
+                problems.append("\(base.lastPathComponent): kein Zugriff auf den Ordner"); continue
+            }
+            while let u = en.nextObject() as? URL {
+                let v = try? u.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+                if v?.isDirectory == true {
+                    if skipDirs.contains(u.lastPathComponent) { en.skipDescendants() }
+                    continue
+                }
+                guard v?.isRegularFile == true else { continue }
+                let ext = u.pathExtension.lowercased()
+                if Self.videoExt.contains(ext) || ext == "gyroflow" { byDir[u.deletingLastPathComponent(), default: []].append(u) }
+            }
+        }
+        // Nur Ordner, in denen Gyroflow wirklich etwas erzeugt hat
+        var jobs: [(URL, String)] = []
+        for (dir, files) in byDir {
+            let videos = files.filter { $0.pathExtension.lowercased() != "gyroflow" }
+            guard videos.contains(where: isStabilized) else {
+                if !videos.isEmpty { hints.append("\(dir.lastPathComponent): keine stabilisierten Clips gefunden – unverändert gelassen") }
+                continue
+            }
+            for f in files {
+                let target = f.pathExtension.lowercased() == "gyroflow" ? "Gyroflow-Projekte"
+                           : isStabilized(f) ? "Stabilisiert" : "Original"
+                jobs.append((f, target))
+            }
+        }
+        total = jobs.count
+        phase = .sorting
+        for (f, target) in jobs.sorted(by: { $0.0.path < $1.0.path }) {
+            if Task.isCancelled { phase = .cancelled; return }
+            currentFile = f.lastPathComponent
+            if await move(f, to: f.deletingLastPathComponent().appendingPathComponent(target)) {
+                sideCounts[target, default: 0] += 1
+            }
+            processed += 1
+        }
+        currentFile = ""
+        if total == 0 && problems.isEmpty {
+            hints.append("Keine stabilisierten Clips gefunden. Endungen in den Einstellungen prüfen: \(store.gyroSuffixes)")
+        }
+        phase = .done
     }
 
     func cancel() {

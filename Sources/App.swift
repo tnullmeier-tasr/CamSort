@@ -235,6 +235,18 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
 
+            Button { sorter.startGyro() } label: {
+                Label("Schritt 2: Nach Gyroflow trennen", systemImage: "gyroscope")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .frame(maxWidth: .infinity).frame(height: 40)
+                    .background(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.mint.opacity(0.7), lineWidth: 1.5))
+                    .foregroundStyle(Theme.mint)
+                    .opacity(sorter.folders.isEmpty ? 0.35 : 1)
+            }
+            .buttonStyle(.plain)
+            .disabled(sorter.folders.isEmpty)
+            .help("Nachdem Gyroflow gerendert hat: stabilisierte Clips nach „Stabilisiert“, Originale nach „Original“")
+
             Text("Dateien werden nur verschoben – nie verändert.")
                 .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
         }
@@ -302,7 +314,8 @@ struct CountGrid: View {
             ("Fotos", "photo.fill", Color(red: 0.6, green: 0.7, blue: 1), sorter.counts["Fotos"] ?? 0),
         ]
         if let v = sorter.counts["Video"], v > 0 { r.append(("Video", "film", .white, v)) }
-        let icons = ["XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft", "Musik": "music.note",
+        let icons = ["Stabilisiert": "gyroscope", "Original": "film", "Gyroflow-Projekte": "doc.badge.gearshape",
+                     "XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft", "Musik": "music.note",
                      "ZIP": "doc.zipper", "FCP": "film.stack"]
         let keys = Set(["XML", "LRF", "SRT"]).union(sorter.sideCounts.keys).sorted()
         for k in keys { r.append((k, icons[k] ?? "doc.fill", .white, sorter.sideCounts[k] ?? 0)) }
@@ -671,6 +684,12 @@ struct SettingsView: View {
             Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
             Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
             Text("Klappt, wenn die Kamera das Objektiv speichert (z. B. Sony).")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Divider()
+            Text("Gyroflow (Schritt 2)").font(.system(size: 13, weight: .semibold))
+            TextField("Endungen stabilisierter Dateien", text: $store.gyroSuffixes)
+                .textFieldStyle(.roundedBorder)
+            Text("Kommagetrennt. Clips, deren Name eine dieser Endungen enthält, gelten als stabilisiert.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Divider()
             Toggle("Drohnen-Clips nach Geschwindigkeit sortieren", isOn: $store.droneBySpeed.animation())
