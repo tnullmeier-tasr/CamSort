@@ -389,7 +389,7 @@ struct DoneView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            ScrollView(showsIndicators: false) {
+            MaybeScroll {
                 VStack(spacing: 14) {
                     ZStack {
                         Circle().fill(accent.opacity(0.2)).frame(width: 96, height: 96).scaleEffect(pop ? 1 : 0.2)
@@ -872,5 +872,18 @@ struct SpeedRange: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+    }
+}
+
+
+/// Im Screenshot-Modus ohne ScrollView (ImageRenderer zeichnet ScrollViews nicht).
+struct MaybeScroll<C: View>: View {
+    @ViewBuilder let content: C
+    var body: some View {
+        #if SCREENSHOT
+        content
+        #else
+        ScrollView(showsIndicators: false) { content }
+        #endif
     }
 }

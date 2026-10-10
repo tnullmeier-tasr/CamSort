@@ -6,6 +6,7 @@ import AppKit
 struct ScreenshotTool {
     @MainActor static func main() {
         _ = NSApplication.shared
+        if let icon = NSImage(contentsOfFile: "Resources/AppIcon.png") { NSApplication.shared.applicationIconImage = icon }
         let store = LearnedStore()
         store.showGyroButton = true
         let sorter = Sorter(store: store)
@@ -15,6 +16,7 @@ struct ScreenshotTool {
         sorter.counts = ["Hochkant": 38, "Quer": 112, "Fotos": 24]
         sorter.sideCounts = ["XML": 96, "LRF": 21, "SRT": 21]
         sorter.cameras = ["Sony Alpha 1": 74, "Sony ZV-E1": 22, "Mavic 3 Pro": 21, "iPhone": 33]
+        sorter.hints = ["Gyroflow-Knopf: schickt die Sony-Clips nacheinander an Gyroflow"]
         sorter.phase = .done
         let view = ContentView()
             .environmentObject(sorter).environmentObject(store).environmentObject(theme).environmentObject(gyro)
