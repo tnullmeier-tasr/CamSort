@@ -267,7 +267,7 @@ struct GyroView: View {
                     Image(systemName: "gyroscope").font(.system(size: 26)).foregroundStyle(Theme.mint)
                     Text("\(Int(gyro.overall * 100)) %").font(.system(size: 34, weight: .heavy, design: .rounded))
                         .contentTransition(.numericText())
-                    Text("Clip \(min(gyro.index + 1, max(gyro.queue.count, 1))) von \(gyro.queue.count)")
+                    Text(gyro.queue.isEmpty ? " " : "Clip \(min(gyro.index + 1, gyro.queue.count)) von \(gyro.queue.count)")
                         .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
                 }
             }

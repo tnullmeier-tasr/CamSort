@@ -183,10 +183,11 @@ final class Sorter: ObservableObject {
         }
         // Nur Ordner, in denen Gyroflow wirklich etwas erzeugt hat
         var jobs: [(URL, String)] = []
+        var untouched = 0
         for (dir, files) in byDir {
             let videos = files.filter { $0.pathExtension.lowercased() != "gyroflow" }
             guard videos.contains(where: isStabilized) else {
-                if !videos.isEmpty && !auto { hints.append("\(dir.lastPathComponent): keine stabilisierten Clips gefunden – unverändert gelassen") }
+                if !videos.isEmpty { untouched += 1 }
                 continue
             }
             for f in files {
@@ -196,6 +197,9 @@ final class Sorter: ObservableObject {
             }
         }
         if auto && jobs.isEmpty { return }
+        if !auto && untouched > 0 && !jobs.isEmpty {
+            hints.append("\(untouched) Ordner ohne stabilisierte Clips – unverändert gelassen")
+        }
         stepLabel = "Schritt 2: Gyroflow-Dateien trennen"
         total = jobs.count; processed = 0
         phase = .sorting

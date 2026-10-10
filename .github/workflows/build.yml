@@ -60,6 +60,16 @@ jobs:
           git add docs/test && git commit -qm "Testergebnis [skip ci]" && git push -q || true
       - name: Build
         run: ./build.sh
+      - name: Echtes Bildschirmfoto
+        continue-on-error: true
+        run: |
+          open build/CamSort.app; sleep 8
+          mkdir -p docs/test
+          screencapture -x -o -l$(osascript -e 'tell application "System Events" to get id of first window of process "CamSort"' 2>/dev/null || echo 0) docs/test/echt-start.png 2>/dev/null || screencapture -x docs/test/echt-start.png
+          osascript -e 'quit app "CamSort"' || true
+          git config user.name "CamSort CI"; git config user.email "ci@users.noreply.github.com"
+          git pull -q --rebase || true
+          git add docs/test && git commit -qm "Bildschirmfoto [skip ci]" && git push -q || true
       - uses: actions/upload-artifact@v4
         with:
           name: CamSort

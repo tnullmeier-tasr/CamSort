@@ -346,6 +346,7 @@ struct SortingView: View {
 
 struct CountGrid: View {
     @EnvironmentObject var sorter: Sorter
+    var hideZeros = false
     private var items: [(key: String, icon: String, color: Color, n: Int)] {
         var r: [(key: String, icon: String, color: Color, n: Int)] = [
             ("Hochkant", "rectangle.portrait.fill", Theme.mint, sorter.counts["Hochkant"] ?? 0),
@@ -362,7 +363,7 @@ struct CountGrid: View {
     }
     var body: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-            ForEach(items, id: \.key) { item in
+            ForEach(items.filter { !hideZeros || $0.n > 0 }, id: \.key) { item in
                 VStack(spacing: 5) {
                     Image(systemName: item.icon).font(.system(size: 16)).foregroundStyle(item.color)
                     Text("\(item.n)").font(.system(size: 19, weight: .bold, design: .rounded))
@@ -414,7 +415,7 @@ struct DoneView: View {
                     Text(summary).font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
                         .multilineTextAlignment(.center)
 
-                    CountGrid()
+                    CountGrid(hideZeros: true)
 
                     if !sorter.cameras.isEmpty {
                         FlowChips(items: sorter.cameras.sorted { $0.value > $1.value }.map { ($0.key, $0.value) })
