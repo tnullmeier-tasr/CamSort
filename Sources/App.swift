@@ -223,7 +223,8 @@ struct IdleView: View {
             Spacer(minLength: 0)
 
             Button { sorter.start() } label: {
-                Label("Sortieren starten", systemImage: "wand.and.stars")
+                Label(sorter.folders.contains { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }
+                      ? "Aktualisieren" : "Sortieren starten", systemImage: "wand.and.stars")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .frame(maxWidth: .infinity).frame(height: 50)
                     .background(RoundedRectangle(cornerRadius: 14)
@@ -234,18 +235,6 @@ struct IdleView: View {
             }
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
-
-            Button { sorter.startGyro() } label: {
-                Label("Schritt 2: Nach Gyroflow trennen", systemImage: "gyroscope")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .frame(maxWidth: .infinity).frame(height: 40)
-                    .background(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.mint.opacity(0.7), lineWidth: 1.5))
-                    .foregroundStyle(Theme.mint)
-                    .opacity(sorter.folders.isEmpty ? 0.35 : 1)
-            }
-            .buttonStyle(.plain)
-            .disabled(sorter.folders.isEmpty)
-            .help("Nachdem Gyroflow gerendert hat: stabilisierte Clips nach „Stabilisiert“, Originale nach „Original“")
 
             Text("Dateien werden nur verschoben – nie verändert.")
                 .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
@@ -288,6 +277,12 @@ struct SortingView: View {
                 .id(sorter.currentFile)
                 .transition(.push(from: .bottom))
                 .animation(.easeOut(duration: 0.2), value: sorter.currentFile)
+
+            if !sorter.stepLabel.isEmpty {
+                Text(sorter.stepLabel)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.mint)
+                    .transition(.opacity)
+            }
 
             CountGrid()
 
@@ -686,7 +681,7 @@ struct SettingsView: View {
             Text("Klappt, wenn die Kamera das Objektiv speichert (z. B. Sony).")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Divider()
-            Text("Gyroflow (Schritt 2)").font(.system(size: 13, weight: .semibold))
+            Toggle("Gyroflow-Clips automatisch trennen (Stabilisiert / Original)", isOn: $store.autoGyro)
             TextField("Endungen stabilisierter Dateien", text: $store.gyroSuffixes)
                 .textFieldStyle(.roundedBorder)
             Text("Kommagetrennt. Clips, deren Name eine dieser Endungen enthält, gelten als stabilisiert.")

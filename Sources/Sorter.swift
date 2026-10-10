@@ -126,25 +126,38 @@ final class Sorter: ObservableObject {
 
     private func clearResults() {
         counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; speeds = [:]; skipped = 0; ignored = 0
-        problems = []; hints = []; dupForAll = nil; skipAsking = false; askedCameras = [:]
+        problems = []; hints = []; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
     }
 
     func start() {
         guard !folders.isEmpty else { return }
         clearResults(); processed = 0
         phase = .scanning
-        task = Task { await run() }
+        task = Task {
+            stepLabel = alreadySorted ? "Ordner schon sortiert – suche neue Dateien" : "Schritt 1: Sortieren"
+            await run()
+            guard phase != .cancelled, !Task.isCancelled else { return }
+            if store.autoGyro { await runGyro(auto: true) }
+            stepLabel = ""
+            phase = Task.isCancelled ? .cancelled : .done
+        }
     }
 
     /// Schritt 2: nach Gyroflow stabilisierte und unstabilisierte Clips trennen.
+    @Published var stepLabel = ""
+    @Published var gyroMoved = 0
+    private var alreadySorted: Bool {
+        folders.contains { fm.fileExists(atPath: $0.appendingPathComponent("Videos").path) }
+    }
+
     func startGyro() {
         guard !folders.isEmpty else { return }
         clearResults(); processed = 0
         phase = .scanning
-        task = Task { await runGyro() }
+        task = Task { stepLabel = "Gyroflow-Dateien trennen"; await runGyro(auto: false); stepLabel = ""; phase = Task.isCancelled ? .cancelled : .done }
     }
 
-    private func runGyro() async {
+    private func runGyro(auto: Bool) async {
         let suffixes = store.gyroSuffixList
         func isStabilized(_ u: URL) -> Bool {
             let stem = u.deletingPathExtension().lastPathComponent.lowercased()
@@ -173,7 +186,7 @@ final class Sorter: ObservableObject {
         for (dir, files) in byDir {
             let videos = files.filter { $0.pathExtension.lowercased() != "gyroflow" }
             guard videos.contains(where: isStabilized) else {
-                if !videos.isEmpty { hints.append("\(dir.lastPathComponent): keine stabilisierten Clips gefunden – unverändert gelassen") }
+                if !videos.isEmpty && !auto { hints.append("\(dir.lastPathComponent): keine stabilisierten Clips gefunden – unverändert gelassen") }
                 continue
             }
             for f in files {
@@ -182,21 +195,23 @@ final class Sorter: ObservableObject {
                 jobs.append((f, target))
             }
         }
-        total = jobs.count
+        if auto && jobs.isEmpty { return }
+        stepLabel = "Schritt 2: Gyroflow-Dateien trennen"
+        total = jobs.count; processed = 0
         phase = .sorting
         for (f, target) in jobs.sorted(by: { $0.0.path < $1.0.path }) {
             if Task.isCancelled { phase = .cancelled; return }
             currentFile = f.lastPathComponent
             if await move(f, to: f.deletingLastPathComponent().appendingPathComponent(target)) {
                 sideCounts[target, default: 0] += 1
+                gyroMoved += 1
             }
             processed += 1
         }
         currentFile = ""
-        if total == 0 && problems.isEmpty {
+        if total == 0 && problems.isEmpty && !auto {
             hints.append("Keine stabilisierten Clips gefunden. Endungen in den Einstellungen prüfen: \(store.gyroSuffixes)")
         }
-        phase = .done
     }
 
     func cancel() {
@@ -405,7 +420,6 @@ final class Sorter: ObservableObject {
             processed += 1
         }
         currentFile = ""
-        phase = Task.isCancelled ? .cancelled : .done
     }
 
     // MARK: Verschieben

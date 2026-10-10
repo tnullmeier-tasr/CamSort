@@ -46,6 +46,7 @@ final class LearnedStore: ObservableObject {
     @Published var standMax: Double { didSet { d.set(standMax, forKey: "standMax") } }
     @Published var moveMin: Double { didSet { d.set(moveMin, forKey: "moveMin") } }
     @Published var moveMax: Double { didSet { d.set(moveMax, forKey: "moveMax") } }
+    @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
     var gyroSuffixList: [String] {
         gyroSuffixes.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
@@ -61,6 +62,7 @@ final class LearnedStore: ObservableObject {
         standMax = d.object(forKey: "standMax") as? Double ?? 3
         moveMin = d.object(forKey: "moveMin") as? Double ?? 5
         moveMax = d.object(forKey: "moveMax") as? Double ?? 100
+        autoGyro = d.object(forKey: "autoGyro") as? Bool ?? true
         gyroSuffixes = d.string(forKey: "gyroSuffixes") ?? "_stabilized, _stabilisiert, _gyroflow, _gyro"
         if let data = d.data(forKey: "cameraRules2"), let r = try? JSONDecoder().decode([CameraRule].self, from: data) { rules = r }
         if let data = d.data(forKey: "extensions2"), let e = try? JSONDecoder().decode([String: FileCategory].self, from: data) { extensions = e }
