@@ -15,6 +15,8 @@ final class TagRunner: ObservableObject {
     @Published var currentFile = ""
     @Published var tagCounts: [String: Int] = [:]
     @Published var errors: [String] = []
+    var eta = ETA()
+    var remainingText: String { ETA.text(eta.remaining(done: Double(index), total: Double(queue.count))) }
 
     var active: Bool { state != .idle }
     var progress: Double { queue.isEmpty ? 0 : Double(index) / Double(queue.count) }
@@ -57,6 +59,7 @@ final class TagRunner: ObservableObject {
             state = .finished; return
         }
         state = .running
+        eta.begin()
         Task { await run() }
     }
 
@@ -93,8 +96,8 @@ final class TagRunner: ObservableObject {
         state = cancelled ? .idle : .finished
     }
 
-    func pause() { paused = true; state = .paused }
-    func resume() { paused = false; state = .running }
+    func pause() { paused = true; eta.pause(); state = .paused }
+    func resume() { paused = false; eta.resume(); state = .running }
     func cancel() { cancelled = true; paused = false }
     func close() { state = .idle; queue = []; tagCounts = [:]; errors = [] }
 
@@ -190,6 +193,12 @@ struct TagView: View {
             Text(tagger.state == .finished ? "Verschlagworten fertig" :
                  tagger.state == .paused ? "Pausiert" : "Analysiere Clips (lokal, offline) …")
                 .font(.system(size: 15, weight: .bold, design: .rounded))
+            if tagger.state == .running {
+                Label(tagger.remainingText, systemImage: "clock")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.mint)
+            } else if tagger.state == .finished {
+                Text("Dauer: \(ETA.duration(tagger.eta.elapsed))").font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+            }
             if !tagger.currentFile.isEmpty {
                 Text(tagger.currentFile).font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.7)).lineLimit(1).truncationMode(.middle)

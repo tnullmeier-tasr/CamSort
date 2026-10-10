@@ -30,6 +30,14 @@ final class ImportRunner: ObservableObject {
     @Published var skipped = 0
     @Published var errors: [String] = []
     @Published var verify = true
+    @Published var tick = Date()          // aktualisiert Zeitanzeige
+    var eta = ETA()
+    var speedText: String {
+        let e = eta.elapsed
+        guard e > 2, copiedBytes > 0 else { return "" }
+        return ImportRunner.fmt(Int64(Double(copiedBytes) / e)) + "/s"
+    }
+    var remainingText: String { ETA.text(eta.remaining(done: Double(copiedBytes), total: Double(totalBytes))) }
 
     var active: Bool { state != .idle }
     var progress: Double { totalBytes == 0 ? 0 : Double(copiedBytes) / Double(totalBytes) }
@@ -129,7 +137,9 @@ final class ImportRunner: ObservableObject {
         totalBytes = days.filter { selected.contains($0.key) }.reduce(0) { $0 + $1.bytes }
         copiedBytes = 0; cancelled = false; paused = false
         state = .copying
+        eta.begin()
         Task { await copyAll(files, from: src, to: dst) }
+        Task { while state == .copying || state == .paused { tick = Date(); try? await Task.sleep(nanoseconds: 1_000_000_000) } }
     }
 
     private func copyAll(_ files: [URL], from src: URL, to dst: URL) async {
@@ -166,13 +176,14 @@ final class ImportRunner: ObservableObject {
         }
         currentFile = ""
         if cancelled { state = .idle; return }
+        let took = ETA.duration(eta.elapsed)
         state = .finished
         // Danach direkt sortieren
         if copied + skipped > 0, let sorter {
             sorter.reset()
             sorter.addFolders([dst])
             sorter.start()
-            sorter.hints.append("Import: \(copied) Dateien kopiert\(verify ? " und geprüft" : "")\(skipped > 0 ? ", \(skipped) waren schon da" : "")")
+            sorter.hints.append("Import: \(copied) Dateien kopiert\(verify ? " und geprüft" : "")\(skipped > 0 ? ", \(skipped) waren schon da" : "") – Dauer \(took)")
             sorter.problems.append(contentsOf: errors)
             state = .idle
         }
@@ -186,8 +197,8 @@ final class ImportRunner: ObservableObject {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    func pause() { paused = true; state = .paused }
-    func resume() { paused = false; state = .copying }
+    func pause() { paused = true; eta.pause(); state = .paused }
+    func resume() { paused = false; eta.resume(); state = .copying }
     func cancel() { cancelled = true; paused = false; if state == .choosing { state = .idle } }
     func close() { state = .idle }
 
@@ -211,6 +222,15 @@ struct ImportChooser: View {
     @EnvironmentObject var imp: ImportRunner
     private var selBytes: Int64 { imp.days.filter { imp.selected.contains($0.key) }.reduce(0) { $0 + $1.bytes } }
     private var selFiles: Int { imp.days.filter { imp.selected.contains($0.key) }.reduce(0) { $0 + $1.files.count } }
+    /// Grobe Schätzung mit typischen Kartenlesern (~150 MB/s; mit Prüfung etwa doppelte Lesezeit)
+    private var estimate: String {
+        let mbps = 150.0 * 1_000_000
+        var secs = Double(selBytes) / mbps
+        if imp.verify { secs *= 1.8 }
+        if secs < 60 { return "unter 1 Minute" }
+        let m = Int(secs / 60 + 0.5)
+        return m < 60 ? "ca. \(m) Min." : "ca. \(m / 60) Std. \(m % 60) Min."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -279,6 +299,10 @@ struct ImportChooser: View {
                     Button("Wählen …") { imp.chooseDestination() }.buttonStyle(.plain).foregroundStyle(Theme.orange)
                 }
             }
+            if selFiles > 0 {
+                Text("Geschätzte Dauer: \(estimate) – die genaue Restzeit siehst du beim Kopieren.")
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+            }
             Toggle("Jede Kopie per Prüfsumme kontrollieren (sicherer, etwas langsamer)", isOn: $imp.verify)
                 .toggleStyle(.switch).controlSize(.small).font(.system(size: 11))
 
@@ -336,6 +360,14 @@ struct ImportProgress: View {
                 .font(.system(size: 15, weight: .bold, design: .rounded))
             Text(imp.currentFile).font(.system(size: 12, design: .monospaced)).foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1).truncationMode(.middle)
+            if imp.state == .copying || imp.state == .paused {
+                HStack(spacing: 14) {
+                    Label(imp.state == .paused ? "pausiert" : imp.remainingText, systemImage: "clock")
+                    if !imp.speedText.isEmpty { Label(imp.speedText, systemImage: "speedometer") }
+                }
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.mint)
+                .id(imp.tick)
+            }
             if !imp.errors.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(imp.errors, id: \.self) { Text("• " + $0).font(.system(size: 11)) }

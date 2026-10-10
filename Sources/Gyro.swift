@@ -17,6 +17,8 @@ final class GyroRunner: ObservableObject {
     @Published var errors: [String] = []
 
     var active: Bool { state != .idle }
+    var eta = ETA()
+    var remainingText: String { ETA.text(eta.remaining(done: Double(index) + filePercent, total: Double(queue.count))) }
     var overall: Double {
         queue.isEmpty ? 0 : (Double(index) + filePercent) / Double(queue.count)
     }
@@ -142,6 +144,7 @@ final class GyroRunner: ObservableObject {
         }
         index = 0
         state = .running
+        eta.begin()
         Task { await runAll(exe: exe, preset: preset, hochkantCount: clips.hochkant.count, folders: folders) }
     }
 
@@ -227,12 +230,14 @@ final class GyroRunner: ObservableObject {
     func pause() {
         pauseRequested = true
         if let p = process, p.isRunning { _ = p.suspend() }
+        eta.pause()
         state = .paused
     }
 
     func resume() {
         pauseRequested = false
         if let p = process, p.isRunning { _ = p.resume() }
+        eta.resume()
         state = .running
     }
 
@@ -281,6 +286,8 @@ struct GyroView: View {
                     Text(gyro.currentFile).font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.7)).lineLimit(1).truncationMode(.middle)
                     ProgressView(value: gyro.filePercent).tint(Theme.orange).frame(maxWidth: 300)
+                    Label(gyro.state == .paused ? "pausiert" : gyro.remainingText, systemImage: "clock")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.mint)
                     Text("Clips werden einzeln nacheinander gerendert – erst Hochkant, dann Quer.")
                         .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
                 }
