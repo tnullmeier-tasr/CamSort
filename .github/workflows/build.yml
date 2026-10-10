@@ -48,10 +48,10 @@ jobs:
         run: |
           which ffmpeg || brew install ffmpeg >/dev/null 2>&1
           ./Tests/make_fixtures.sh "$RUNNER_TEMP/Testordner" > fixtures.txt 2>&1 || true
-          echo "::notice::Testdaten: $(grep -c . fixtures.txt) Zeilen, $(grep 'Auto-Foto' fixtures.txt)"
+          echo "::notice::Testdaten: $(tail -c 1200 fixtures.txt | tr '\n' ' ')"
           swiftc -D SCREENSHOT -D E2E -parse-as-library Sources/*.swift Tests/E2E.swift -o e2e 2> err.txt || { echo "::error::$(head -c 1500 err.txt | tr '\n' ' ')"; exit 1; }
           mkdir -p docs/test
-          timeout 600 ./e2e "$RUNNER_TEMP/Testordner" docs/test > e2e.txt 2>&1; echo "::notice::E2E Exit $?"
+          ./e2e "$RUNNER_TEMP/Testordner" docs/test > e2e.txt 2>&1; echo "::notice::E2E Exit $?"
           (cd "$RUNNER_TEMP/Testordner" && find . -not -name '.*' | sort) > docs/test/ordnerstruktur.txt
           cp fixtures.txt docs/test/testdaten.txt
           cp e2e.txt docs/test/ausgabe.txt
