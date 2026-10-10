@@ -15,20 +15,20 @@
 - ✅ ZIP → ZIP/
 - ✅ Ignorierter Typ bleibt liegen
 - ✅ Unterordner: Canon-Clip im eigenen Ordner sortiert
-- ❌ IMG_xxxx.MOV → iPhone
+- ✅ IMG_xxxx.MOV → iPhone
 - ℹ️ Geschwindigkeits-Hinweis: DJI_20250426155228_0038_D_M3P.MP4: Ø 36.0 km/h → Fahrt
 - ℹ️ Probleme: keine
 - ✅ Zweiter Lauf (Aktualisieren) verändert nichts (0 verschoben)
-- ❌ Gyroflow-Auswahl: nur Sony, Hochkant=["C0003.MP4"] Quer=["C0001.MP4"]
-- ❌ Ohne Preset: klare Meldung statt Absturz
+- ✅ Gyroflow-Auswahl: nur Sony, Hochkant=["C0003.MP4", "C0002.MP4"] Quer=["C0001.MP4"]
+- ✅ Ohne Gyroflow/Preset: klare Meldung statt Absturz („Gyroflow wurde nicht gefunden. Bitte unter Einstellungen › G…“)
 - ✅ Gyroflow-Datei _gyro → Stabilisiert/
 - ✅ Original → Original/
 - ✅ .gyroflow → Gyroflow-Projekte/
 - ✅ Ordner ohne Gyroflow-Clips bleiben unverändert
-- ❌ Schriftzug „PORSCHE“ im Bild → Finder-Tag Porsche (Tags: [])
-- ℹ️ Autofoto nicht verfügbar (Download) – Bilderkennung von Fahrzeugen nicht geprüft
-- ℹ️ Vergebene Tags gesamt: 
+- ✅ Schriftzug „PORSCHE“ im Bild → Finder-Tag Porsche (Tags: ["Porsche"])
+- ✅ Echtes Autofoto → Tag Auto (Tags: ["Auto", "Fahrzeug", "Felge", "Himmel", "Rad", "Reifen"])
+- ℹ️ Vergebene Tags gesamt: Auto×1, Fahrzeug×1, Felge×1, Himmel×1, Porsche×1, Rad×1, Reifen×1
 - ℹ️ Tag-Fehler: keine
-- ❌ Video nach dem Taggen unverändert lesbar
+- ✅ Video nach dem Taggen unverändert lesbar
 
-Fehlgeschlagen: 5
+Fehlgeschlagen: 0

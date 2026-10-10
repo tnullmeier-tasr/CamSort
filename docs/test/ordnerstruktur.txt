@@ -14,6 +14,9 @@
 ./Unterordner/Videos/Canon/Quer
 ./Unterordner/Videos/Canon/Quer/MVI_1234.MP4
 ./Videos
+./Videos/iPhone
+./Videos/iPhone/Quer
+./Videos/iPhone/Quer/IMG_0001.MOV
 ./Videos/Sony Alpha 1
 ./Videos/Sony Alpha 1/Hochkant
 ./Videos/Sony Alpha 1/Hochkant/C0003.MP4
@@ -34,6 +37,8 @@
 ./Videos/Unbekannt/Ohne GPS
 ./Videos/Unbekannt/Ohne GPS/Quer
 ./Videos/Unbekannt/Ohne GPS/Quer/DJI_0162.MP4
+./Videos/Unbekannt/Quer
+./Videos/Unbekannt/Quer/Auto_Foto_Clip.mp4
 ./XML
 ./XML/C0002M01.XML
 ./ZIP
