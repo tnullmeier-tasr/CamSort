@@ -180,6 +180,45 @@ struct E2E {
         }()
         check(sizeOK, "Video nach dem Taggen unverändert lesbar")
 
+        // 6b) Speicherkarten-Import mit Tagesauswahl
+        let card = root.deletingLastPathComponent().appendingPathComponent("FakeKarte")
+        let clipDir = card.appendingPathComponent("PRIVATE/M4ROOT/CLIP")
+        let thumbs = card.appendingPathComponent("PRIVATE/M4ROOT/THMBNL")
+        try? FileManager.default.createDirectory(at: clipDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: thumbs, withIntermediateDirectories: true)
+        let src = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")
+        let fmx = FileManager.default
+        try? fmx.copyItem(at: src, to: clipDir.appendingPathComponent("C0101.MP4"))
+        try? fmx.copyItem(at: src, to: clipDir.appendingPathComponent("C0050.MP4"))
+        try? "<NonRealTimeMeta><Device manufacturer=\"Sony\" modelName=\"ILCE-1\"/></NonRealTimeMeta>".write(to: clipDir.appendingPathComponent("C0101M01.XML"), atomically: true, encoding: .utf8)
+        try? Data([0xFF, 0xD8]).write(to: thumbs.appendingPathComponent("C0101T01.JPG"))
+        let old = Date(timeIntervalSinceNow: -40 * 86400)
+        try? fmx.setAttributes([.modificationDate: old], ofItemAtPath: clipDir.appendingPathComponent("C0050.MP4").path)
+        let imp = ImportRunner(sorter: sorter)
+        imp.source = card
+        let days = ImportRunner.collectDays(card)
+        imp.days = days
+        check(days.count == 2, "Karte: 2 Aufnahmetage erkannt (\(days.map { "\($0.label): \($0.files.count)" }))")
+        check(!days.flatMap(\.files).contains { $0.lastPathComponent.hasPrefix("C0101T01") }, "Sony-Vorschaubilder (THMBNL) werden nicht importiert")
+        imp.selected = [days.first!.key]
+        imp.state = .choosing
+        render(ImportChooser().environmentObject(imp), "15-import-tage")
+        let dest = root.deletingLastPathComponent().appendingPathComponent("ImportZiel")
+        try? fmx.createDirectory(at: dest, withIntermediateDirectories: true)
+        imp.destination = dest
+        imp.startCopy()
+        while imp.state == .copying { try? await Task.sleep(nanoseconds: 50_000_000) }
+        while sorter.phase != .done && sorter.phase != .cancelled {
+            if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
+            if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        check(fmx.fileExists(atPath: dest.appendingPathComponent("Videos/Sony Alpha 1/Quer/C0101.MP4").path), "Import: neuer Tag kopiert, geprüft und einsortiert")
+        check(!fmx.fileExists(atPath: dest.appendingPathComponent("C0050.MP4").path) &&
+              ((try? fmx.subpathsOfDirectory(atPath: dest.path)) ?? []).allSatisfy { !$0.hasSuffix("C0050.MP4") }, "Import: alter Tag NICHT kopiert")
+        check(fmx.fileExists(atPath: clipDir.appendingPathComponent("C0101.MP4").path), "Karte bleibt unverändert")
+        report.append("ℹ️ Import-Fehler: \(imp.errors.isEmpty ? "keine" : imp.errors.joined(separator: " | "))")
+
         // 7) Weitere Ansichten
         render(SettingsView(), "12-einstellungen", w: 480, h: 620, sheet: true)
         store.droneBySpeed = true

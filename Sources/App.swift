@@ -11,6 +11,7 @@ struct CamSortApp: App {
     @StateObject private var theme = ThemeSettings()
     @StateObject private var gyro: GyroRunner
     @StateObject private var tagger = TagRunner()
+    @StateObject private var importer: ImportRunner
 
     init() {
         let s = LearnedStore()
@@ -18,6 +19,7 @@ struct CamSortApp: App {
         _store = StateObject(wrappedValue: s)
         _sorter = StateObject(wrappedValue: so)
         _gyro = StateObject(wrappedValue: GyroRunner(store: s, sorter: so))
+        _importer = StateObject(wrappedValue: ImportRunner(sorter: so))
     }
 
     var body: some Scene {
@@ -28,6 +30,7 @@ struct CamSortApp: App {
                 .environmentObject(theme)
                 .environmentObject(gyro)
                 .environmentObject(tagger)
+                .environmentObject(importer)
                 .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
@@ -57,6 +60,7 @@ struct ContentView: View {
     @EnvironmentObject var theme: ThemeSettings
     @EnvironmentObject var gyro: GyroRunner
     @EnvironmentObject var tagger: TagRunner
+    @EnvironmentObject var importer: ImportRunner
 
     var body: some View {
         ZStack {
@@ -66,7 +70,9 @@ struct ContentView: View {
                 Header()
                     .padding(.top, 34)
                 Group {
-                    if gyro.active {
+                    if importer.active {
+                        ImportView()
+                    } else if gyro.active {
                         GyroView()
                     } else if tagger.active {
                         TagView()
@@ -89,6 +95,7 @@ struct ContentView: View {
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: sorter.phase)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: gyro.active)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: tagger.active)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: importer.active)
         .sheet(item: $sorter.pendingDuplicate) { req in
             DuplicateSheet(request: req).environmentObject(sorter)
         }
@@ -165,6 +172,7 @@ struct Header: View {
 struct IdleView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var store: LearnedStore
+    @EnvironmentObject var importer: ImportRunner
     @State private var showSettings = false
 
     private var settingsSummary: String {
@@ -248,6 +256,18 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
 
+            HStack(spacing: 8) {
+                Button { importer.open() } label: {
+                    Label("Von Speicherkarte importieren", systemImage: "sdcard.fill")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .frame(maxWidth: .infinity).frame(height: 38)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                }
+                .buttonStyle(.plain)
+                HelpButton(title: "Von Speicherkarte importieren",
+                           text: "Zeigt alle Aufnahmetage auf der Karte mit Anzahl und Größe. Du hakst an, welche Tage übernommen werden – alte Aufnahmen auf der Karte bleiben einfach liegen. CamSort kopiert, prüft jede Kopie und sortiert danach automatisch. Die Karte selbst wird nie verändert.")
+            }
+
             Spacer(minLength: 0)
 
             Button { sorter.start() } label: {
@@ -264,7 +284,8 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
 
-            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
+            if (store.autoGyro || store.showGyroButton),
+               sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
                 HStack(spacing: 8) {
                     Button { sorter.startGyro() } label: {
                         Label("Nur Gyroflow-Clips trennen", systemImage: "gyroscope")
