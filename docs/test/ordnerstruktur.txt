@@ -1,0 +1,40 @@
+./Fotos
+./Fotos/IMG_0002.JPG
+./LRF
+./LRF/DJI_20250426155228_0038_D_M3P.LRF
+./Musik
+./Musik/Musik_Intro.mp3
+./Notiz.abc
+./SRT
+./SRT/DJI_0162.SRT
+./SRT/DJI_20250426155228_0038_D_M3P.SRT
+./Unterordner
+./Unterordner/Videos
+./Unterordner/Videos/Canon
+./Unterordner/Videos/Canon/Quer
+./Unterordner/Videos/Canon/Quer/MVI_1234.MP4
+./Videos
+./Videos/Sony Alpha 1
+./Videos/Sony Alpha 1/Hochkant
+./Videos/Sony Alpha 1/Hochkant/C0003.MP4
+./Videos/Sony Alpha 1/Quer
+./Videos/Sony Alpha 1/Quer/Gyroflow-Projekte
+./Videos/Sony Alpha 1/Quer/Gyroflow-Projekte/C0001.gyroflow
+./Videos/Sony Alpha 1/Quer/Original
+./Videos/Sony Alpha 1/Quer/Original/C0001.MP4
+./Videos/Sony Alpha 1/Quer/Stabilisiert
+./Videos/Sony Alpha 1/Quer/Stabilisiert/C0001_gyro.mp4
+./Videos/Sony ZV-E1
+./Videos/Sony ZV-E1/Hochkant
+./Videos/Sony ZV-E1/Hochkant/C0002.MP4
+./Videos/Unbekannt
+./Videos/Unbekannt/Fahrt
+./Videos/Unbekannt/Fahrt/Quer
+./Videos/Unbekannt/Fahrt/Quer/DJI_20250426155228_0038_D_M3P.MP4
+./Videos/Unbekannt/Ohne GPS
+./Videos/Unbekannt/Ohne GPS/Quer
+./Videos/Unbekannt/Ohne GPS/Quer/DJI_0162.MP4
+./XML
+./XML/C0002M01.XML
+./ZIP
+./ZIP/Projekt.zip
