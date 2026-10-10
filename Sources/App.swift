@@ -1,7 +1,9 @@
 import SwiftUI
 import AppKit
 
+#if !SCREENSHOT
 @main
+#endif
 struct CamSortApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var store: LearnedStore
@@ -102,6 +104,7 @@ struct Header: View {
     @State private var appear = false
     @State private var showLearned = false
     @State private var showTheme = false
+    @State private var showGuide = false
     @EnvironmentObject var theme: ThemeSettings
     var body: some View {
         HStack(spacing: 12) {
@@ -117,6 +120,15 @@ struct Header: View {
                     .foregroundStyle(.white.opacity(0.6))
             }
             Spacer()
+            Button { showGuide = true } label: {
+                Image(systemName: "book.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(8)
+                    .background(Circle().fill(Theme.card))
+            }
+            .buttonStyle(.plain)
+            .help("Anleitung: Was kann CamSort?")
+            .sheet(isPresented: $showGuide) { GuideView() }
             Button { showTheme.toggle() } label: {
                 Image(systemName: "paintpalette.fill")
                     .font(.system(size: 13, weight: .semibold))
@@ -367,6 +379,7 @@ struct CountGrid: View {
 struct DoneView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var gyro: GyroRunner
+    @EnvironmentObject var store: LearnedStore
     @State private var pop = false
     @State private var showProblems = true
 
@@ -417,7 +430,7 @@ struct DoneView: View {
                 .padding(.bottom, 6)
             }
 
-            if !cancelled {
+            if !cancelled && store.showGyroButton {
                 HStack(spacing: 8) {
                     Button { gyro.start(folders: sorter.folders) } label: {
                         Label("Sony-Clips mit Gyroflow stabilisieren", systemImage: "gyroscope")
@@ -730,6 +743,9 @@ struct SettingsView: View {
                     }
 
                     section("Gyroflow")
+                    WithHelp(title: "Gyroflow-Option anzeigen", text: "An: Nach dem Sortieren erscheint der Knopf „Sony-Clips mit Gyroflow stabilisieren“.\nAus: Der Knopf wird ausgeblendet – praktisch, wenn du Gyroflow lieber selbst bedienst oder gar nicht nutzt. Das Trennen in Stabilisiert/Original funktioniert trotzdem.") {
+                        Toggle("Gyroflow-Knopf nach dem Sortieren anzeigen", isOn: $store.showGyroButton.animation())
+                    }
                     GyroPresetBox()
                     WithHelp(title: "Gyroflow-App", text: "CamSort sucht Gyroflow automatisch im Programme-Ordner. Nur falls Gyroflow woanders liegt, hier die Gyroflow-App auswählen.") {
                         HStack {
