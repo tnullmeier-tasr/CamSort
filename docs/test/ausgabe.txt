@@ -31,6 +31,12 @@ IOServiceMatchingfailed for: AppleM2ScalerParavirtDriver
 - ℹ️ Vergebene Tags gesamt: Auto×1, Fahrzeug×1, Felge×1, Himmel×1, Porsche×1, Rad×1, Reifen×1
 - ℹ️ Tag-Fehler: keine
 - ✅ Video nach dem Taggen unverändert lesbar
+- ✅ Karte: 2 Aufnahmetage erkannt (["Sa., 10.10.2026: 2", "Mo., 31.08.2026: 1"])
+- ✅ Sony-Vorschaubilder (THMBNL) werden nicht importiert
+- ✅ Import: neuer Tag kopiert, geprüft und einsortiert
+- ✅ Import: alter Tag NICHT kopiert
+- ✅ Karte bleibt unverändert
+- ℹ️ Import-Fehler: keine
 
 Fehlgeschlagen: 0
 
