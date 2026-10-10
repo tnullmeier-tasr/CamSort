@@ -246,6 +246,22 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
 
+            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
+                HStack(spacing: 8) {
+                    Button { sorter.startGyro() } label: {
+                        Label("Nur Gyroflow-Clips trennen", systemImage: "gyroscope")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .frame(maxWidth: .infinity).frame(height: 38)
+                            .background(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.mint.opacity(0.7), lineWidth: 1.5))
+                            .foregroundStyle(Theme.mint)
+                    }
+                    .buttonStyle(.plain)
+                    HelpButton(title: "Nur Gyroflow-Clips trennen",
+                               text: "Für den Fall, dass du die Clips nach dem Sortieren selbst in Gyroflow gerendert hast: CamSort sortiert nichts Neues ein, sondern trennt nur in jedem Ordner, in dem Gyroflow etwas erzeugt hat, nach „Stabilisiert“ (Dateiname enthält z. B. _gyro oder _stabilized), „Original“ und „Gyroflow-Projekte“. Die Endungen stellst du unter Einstellungen › Gyroflow ein.\n\n„Aktualisieren“ macht dasselbe automatisch mit – sortiert aber zusätzlich neue Dateien ein.")
+                }
+                .transition(.opacity)
+            }
+
             Text("Dateien werden nur verschoben – nie verändert.")
                 .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
         }
