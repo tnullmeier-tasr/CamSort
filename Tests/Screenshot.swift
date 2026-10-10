@@ -9,6 +9,7 @@ struct ScreenshotTool {
         if let icon = NSImage(contentsOfFile: "Resources/AppIcon.png") { NSApplication.shared.applicationIconImage = icon }
         let store = LearnedStore()
         store.showGyroButton = true
+        store.enableTagging = true
         let sorter = Sorter(store: store)
         let gyro = GyroRunner(store: store, sorter: sorter)
         let theme = ThemeSettings()
@@ -19,7 +20,7 @@ struct ScreenshotTool {
         sorter.hints = ["Gyroflow-Knopf: schickt die Sony-Clips nacheinander an Gyroflow"]
         sorter.phase = .done
         let view = ContentView()
-            .environmentObject(sorter).environmentObject(store).environmentObject(theme).environmentObject(gyro)
+            .environmentObject(sorter).environmentObject(store).environmentObject(theme).environmentObject(gyro).environmentObject(TagRunner())
             .frame(width: 580, height: 780)
             .environment(\.colorScheme, .dark)
         let r = ImageRenderer(content: view)
