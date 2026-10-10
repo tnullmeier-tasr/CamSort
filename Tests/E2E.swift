@@ -134,7 +134,7 @@ struct E2E {
         check(clips.hochkant.map(\.lastPathComponent).sorted() == ["C0002.MP4", "C0003.MP4"] && clips.quer.map(\.lastPathComponent) == ["C0001.MP4"],
               "Gyroflow-Auswahl: nur Sony, Hochkant=\(clips.hochkant.map(\.lastPathComponent)) Quer=\(clips.quer.map(\.lastPathComponent))")
         gyro.start(folders: [root])  // ohne Preset → verständliche Meldung erwartet
-        if case .failed(let m) = gyro.state { check(m.contains("Preset"), "Ohne Preset: klare Meldung statt Absturz") } else { check(false, "Ohne Preset: Meldung erwartet") }
+        if case .failed(let m) = gyro.state { check(m.contains("Preset") || m.contains("nicht gefunden"), "Ohne Gyroflow/Preset: klare Meldung statt Absturz („\(m.prefix(60))…“)") } else { check(false, "Ohne Gyroflow/Preset: Meldung erwartet") }
         render(GyroView(), "08-gyroflow-hinweis")
         gyro.queue = clips.hochkant + clips.quer; gyro.index = 1; gyro.currentGroup = "Hochkant"
         gyro.currentFile = "C0003.MP4"; gyro.filePercent = 0.42; gyro.state = .running

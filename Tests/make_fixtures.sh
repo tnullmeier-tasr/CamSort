@@ -40,7 +40,19 @@ cp "$D/DJI_20250426155228_0038_D_M3P.MP4" "$D/DJI_20250426155228_0038_D_M3P.LRF"
 $FF -f lavfi -i testsrc2=size=1920x1080:rate=25 -t 2 -pix_fmt yuv420p "$D/DJI_0162.MP4"
 cp "$(dirname "$0")/DJI_0162.SRT" "$D/DJI_0162.SRT"
 # "iPhone"-Clip mit Schriftzug PORSCHE (Test Markenerkennung)
-$FF -f lavfi -i color=c=0x303040:size=1920x1080:rate=25 -t 7 -vf "$(TXT PORSCHE 220)" -pix_fmt yuv420p "$D/IMG_0001.MOV"
+cat > /tmp/txt.swift <<'SW'
+import AppKit
+let img = NSImage(size: NSSize(width: 1920, height: 1080))
+img.lockFocus()
+NSColor(calibratedRed: 0.15, green: 0.15, blue: 0.2, alpha: 1).setFill(); NSRect(x: 0, y: 0, width: 1920, height: 1080).fill()
+let a: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 220), .foregroundColor: NSColor.white]
+let s = NSAttributedString(string: "PORSCHE", attributes: a)
+s.draw(at: NSPoint(x: (1920 - s.size().width) / 2, y: 420))
+img.unlockFocus()
+let rep = NSBitmapImageRep(data: img.tiffRepresentation!)!
+try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: "/tmp/porsche.png"))
+SW
+swift /tmp/txt.swift && $FF -loop 1 -i /tmp/porsche.png -t 7 -vf "scale=1920:1080" -pix_fmt yuv420p -c:v libx264 "$D/IMG_0001.MOV" && echo "PORSCHE-Clip erzeugt"
 # Clip im Unterordner
 $FF -f lavfi -i testsrc=size=1280x720:rate=25 -t 2 -pix_fmt yuv420p "$D/Unterordner/MVI_1234.MP4"
 # Fotos, Musik, ZIP, unbekannter Typ
@@ -49,9 +61,10 @@ $FF -f lavfi -i sine=frequency=440:duration=2 "$D/Musik_Intro.mp3"
 (cd "$D" && echo test > a.txt && zip -q Projekt.zip a.txt && rm a.txt)
 echo "unbekannt" > "$D/Notiz.abc"
 # Echtes Foto eines Autos (Wikimedia) für die Bilderkennung – optional
-for f in "Porsche_911_Carrera_S_(992)_IMG_2970.jpg" "2019_Porsche_911_Carrera_S_Automatic_3.0.jpg" "Porsche_911_(992)_IMG_2925.jpg"; do
-  curl -sfL -A "CamSortTest/1.0" -o /tmp/car.jpg "https://commons.wikimedia.org/wiki/Special:FilePath/$f?width=1280" && break
-done
+URL=$(curl -sf -A "CamSortTest/1.0 (test)" "https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrnamespace=6&gsrsearch=Porsche%20911%20filetype:bitmap&gsrlimit=5&prop=imageinfo&iiprop=url&iiurlwidth=1280" \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); p=list(d["query"]["pages"].values()); print(p[0]["imageinfo"][0]["thumburl"])' 2>/dev/null)
+echo "Autofoto-URL: $URL"
+[ -n "$URL" ] && curl -sfL -A "CamSortTest/1.0 (test)" -o /tmp/car.jpg "$URL"
 if [ -s /tmp/car.jpg ]; then
   $FF -loop 1 -i /tmp/car.jpg -t 7 -vf "scale=1280:-2" -pix_fmt yuv420p "$D/Auto_Foto_Clip.mp4" && echo "Auto-Foto geladen"
 fi

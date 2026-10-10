@@ -92,6 +92,25 @@ final class GyroRunner: ObservableObject {
 
     /// Sony erkennt man am eingebetteten XML in der MP4 (unabhängig vom Ordnernamen).
     static func isSony(_ url: URL) -> Bool {
+        // a) Begleit-XML: liegt nach dem Sortieren in einem „XML“-Ordner weiter oben
+        let stem = url.deletingPathExtension().lastPathComponent
+        var dir = url.deletingLastPathComponent()
+        for _ in 0..<8 {
+            for name in [stem + "M01.XML", stem + "M01.xml"] {
+                for cand in [dir.appendingPathComponent("XML").appendingPathComponent(name), dir.appendingPathComponent(name)] {
+                    if let s = try? String(contentsOf: cand, encoding: .utf8),
+                       s.range(of: "manufacturer=\"Sony\"", options: .caseInsensitive) != nil { return true }
+                }
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }
+            dir = parent
+        }
+        // b) In der MP4 eingebettetes XML
+        return isSonyEmbedded(url)
+    }
+
+    static func isSonyEmbedded(_ url: URL) -> Bool {
         guard let h = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? h.close() }
         var data = (try? h.read(upToCount: 1_048_576)) ?? Data()
