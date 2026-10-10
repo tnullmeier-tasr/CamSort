@@ -1,4 +1,4 @@
-#if SCREENSHOT
+#if SCREENSHOT && !E2E
 import SwiftUI
 import AppKit
 
