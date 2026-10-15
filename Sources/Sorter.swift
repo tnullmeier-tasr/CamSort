@@ -89,7 +89,7 @@ final class Sorter: ObservableObject {
     static let projectExt: Set<String> = ["fcpbundle", "fcpxml", "fcpxmld", "fcpxd"]
     static let sideExt: Set<String> = ["gyroflow", "xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
     static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini", "localized"]
-    static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer", "Stabilisiert", "Original", "Gyroflow-Projekte"]
+    static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer", "Stabilisiert", "Original", "Gyroflow-Projekte", "Begleitdateien"]
 
     private var dupForAll: DupChoice?
     @Published var skipAsking = false   // „Lernen überspringen“ für diesen Durchlauf
@@ -462,16 +462,23 @@ final class Sorter: ObservableObject {
     /// Dreh-Ordner: über „Videos“ bzw. über Kartenordnern (DCIM, PRIVATE …), sonst der Ordner selbst.
     static func drehRoot(_ dir: URL) -> URL {
         let c = dir.pathComponents
-        if let i = c.firstIndex(of: "Videos") { return URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i]))) }
-        if let i = c.firstIndex(where: { cardMarkers.contains($0.uppercased()) }) {
-            return URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i])))
-        }
-        return dir
+        var root = dir
+        if let i = c.firstIndex(of: "Videos") { root = URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i]))) }
+        else if let i = c.firstIndex(where: { cardMarkers.contains($0.uppercased()) }) {
+            root = URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i])))
+        } else { return dir }
+        // Ordner, der nur eine Kartenkopie enthält (z. B. „Karte A/PRIVATE“) → der Dreh ist eine Ebene höher
+        let inside = ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []).filter { !$0.hasPrefix(".") }
+        let cardish = cardMarkers.union(["MISC", "AVF_INFO", "THMBNL", "SUB", "GENERAL"])
+        let hasCard = inside.contains { cardish.contains($0.uppercased()) }
+        let onlyCardOrOutput = inside.allSatisfy { cardish.contains($0.uppercased()) || fixedOutput.contains($0) }
+        if hasCard && onlyCardOrOutput { root = root.deletingLastPathComponent() }
+        return root
     }
 
     private func sidecar(_ stem: String, exts: [String], near dir: URL) -> URL? {
         let dreh = Self.drehRoot(dir)
-        let dirs = [dir, dreh.appendingPathComponent("Begleitdateien"), dreh.appendingPathComponent("SRT")]
+        let dirs = [dir, dreh.appendingPathComponent("Begleitdateien"), dreh.appendingPathComponent("SRT"), dreh.appendingPathComponent("XML")]
         for d in dirs { for e in exts {
             let u = d.appendingPathComponent(stem + e)
             if fm.fileExists(atPath: u.path) { return u }
@@ -636,10 +643,9 @@ final class Sorter: ObservableObject {
         let bytes = headTail(url)
 
         // Sony: Modell aus Begleit-XML oder aus dem in der MP4 eingebetteten XML
-        for x in [stem + "M01.XML", stem + "M01.xml"] where siblings.contains(x) {
-            if let s = try? String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(x), encoding: .utf8),
-               let n = Self.sonyName(fromXML: s) { return known(n, "Sony-XML") }
-        }
+        if let xu = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: url.deletingLastPathComponent()),
+           let s = try? String(contentsOf: xu, encoding: .utf8),
+           let n = Self.sonyName(fromXML: s) { return known(n, "Sony-XML") }
         if let s = String(data: bytes, encoding: .isoLatin1), let n = Self.sonyName(fromXML: s) {
             return known(n, "Sony-Metadaten in der Datei")
         }
@@ -718,10 +724,9 @@ final class Sorter: ObservableObject {
     private func lensName(for url: URL, asset: AVURLAsset, siblings: Set<String>) async -> String? {
         let stem = url.deletingPathExtension().lastPathComponent
         // Sony: <Lens modelName="…"> in Begleit-XML oder eingebettet
-        for x in [stem + "M01.XML", stem + "M01.xml"] where siblings.contains(x) {
-            if let s = try? String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(x), encoding: .utf8),
-               let l = Self.lens(fromXML: s) { return l }
-        }
+        if let xu = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: url.deletingLastPathComponent()),
+           let s = try? String(contentsOf: xu, encoding: .utf8),
+           let l = Self.lens(fromXML: s) { return l }
         if let s = String(data: headTail(url), encoding: .isoLatin1), let l = Self.lens(fromXML: s) { return l }
         // Andere Kameras/Handys: Objektiv-Angabe in den Metadaten, falls vorhanden
         if let items = try? await asset.load(.metadata) {

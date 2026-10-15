@@ -23,7 +23,8 @@ enum LosslessRotate {
     static func rotate(_ url: URL, clockwise: Bool) throws {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         let fh = try FileHandle(forUpdating: url)
-        defer { try? fh.close() }
+        var closed = false
+        defer { if !closed { try? fh.close() } }
         let size = try fh.seekToEnd()
 
         // 1) moov suchen (darf am Anfang oder Ende liegen)
@@ -72,6 +73,7 @@ enum LosslessRotate {
         try fh.seek(toOffset: moovOff + UInt64(matrixPos))
         try fh.write(contentsOf: bytes)
         try fh.synchronize()
+        try fh.close(); closed = true
         // Datum unverändert lassen (wichtig für Zeitleiste/Sortierung)
         if let md = attrs[.modificationDate] { try? FileManager.default.setAttributes([.modificationDate: md], ofItemAtPath: url.path) }
     }
