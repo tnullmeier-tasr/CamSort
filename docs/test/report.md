@@ -40,12 +40,12 @@
 - ✅ Überlappende Clips zweier Kameras → als „parallel“ erkannt
 - ✅ Finder-Ansicht „Alle Clips nach Zeit“ angelegt
 - ✅ Kompakt: eine Ebene, Name mit Kamera und Ausrichtung → Dreh 1/Videos/Sony Alpha 1 · Quer
-- ❌ Kompakt: Clip von der Karte zählt zum Dreh 2 → Videos/Sony Alpha 1 · Quer
+- ✅ Kompakt: Clip von der Karte zählt zum Dreh 2 → Videos/Sony Alpha 1 · Quer
 - ✅ Kompakt: zweite Kamera → Videos/Sony ZV-E1 · Hochkant
 - ✅ Kompakt: XML → Begleitdateien
 - ✅ Kunden-Ordner selbst bleibt unangetastet (kein Videos-Ordner auf Kundenebene)
 - ❌ Aktualisieren: neuer Clip in Dreh 1 bekommt eigenen Ordner, bestehende bleiben
-- ℹ️ Kompakt-Struktur: Dreh 1 | Dreh 1/Videos | Dreh 1/Videos/Sony Alpha 1 · Quer | Dreh 1/Videos/Sony Alpha 1 · Quer/C0101.MP4 | Dreh 1/Videos/Sony Alpha 1 · Quer/C0102.MP4 | Dreh 1/Videos/Sony · Hochkant | Dreh 1/Videos/Sony · Hochkant/C0103.MP4 | Dreh 2 | Dreh 2/Begleitdateien | Dreh 2/Begleitdateien/Begleitdateien | Dreh 2/Begleitdateien/Begleitdateien/C0202M01.XML | Dreh 2/Karte A | Dreh 2/Karte A/PRIVATE | Dreh 2/Karte A/PRIVATE/M4ROOT | Dreh 2/Karte A/PRIVATE/M4ROOT/CLIP | Dreh 2/Karte A/Videos | Dreh 2/Karte A/Videos/Sony Alpha 1 · Quer | Dreh 2/Karte A/Videos/Sony Alpha 1 · Quer/C0201.MP4 | Dreh 2/Videos | Dreh 2/Videos/Sony · Hochkant | Dreh 2/Videos/Sony · Hochkant/C0202.MP4
+- ℹ️ Kompakt-Struktur: Dreh 1 | Dreh 1/Videos | Dreh 1/Videos/Sony Alpha 1 · Quer | Dreh 1/Videos/Sony Alpha 1 · Quer/C0101.MP4 | Dreh 1/Videos/Sony Alpha 1 · Quer/C0102.MP4 | Dreh 1/Videos/Sony · Hochkant | Dreh 1/Videos/Sony · Hochkant/C0103.MP4 | Dreh 2 | Dreh 2/Begleitdateien | Dreh 2/Begleitdateien/C0202M01.XML | Dreh 2/Karte A | Dreh 2/Karte A/PRIVATE | Dreh 2/Karte A/PRIVATE/M4ROOT | Dreh 2/Karte A/PRIVATE/M4ROOT/CLIP | Dreh 2/Videos | Dreh 2/Videos/Sony Alpha 1 · Quer | Dreh 2/Videos/Sony Alpha 1 · Quer/C0201.MP4 | Dreh 2/Videos/Sony ZV-E1 · Hochkant | Dreh 2/Videos/Sony ZV-E1 · Hochkant/C0202.MP4
 - ✅ Drehen: Quer-Clip ist danach Hochkant
 - ✅ Drehen: Dateigröße identisch (nichts neu berechnet)
 - ✅ Drehen: nur die Dreh-Angabe geändert (7 Byte von 71905)
@@ -53,4 +53,4 @@
 - ✅ Viermal drehen = bitgenau die Originaldatei
 - ❌ Drehen: Dateidatum bleibt unverändert
 
-Fehlgeschlagen: 3
+Fehlgeschlagen: 2

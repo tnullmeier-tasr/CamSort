@@ -2,21 +2,21 @@ PORSCHE-Clip erzeugt
 Autofoto-URL: https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c6/2013_Porsche_911_Carrera_4S_%28991%29_%289626546987%29.jpg/1280px-2013_Porsche_911_Carrera_4S_%28991%29_%289626546987%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail
 Auto-Foto geladen
 total 12592
-drwxr-xr-x  18 runner  staff      576 Oct 15 21:30 .
-drwxr-xr-x   9 runner  staff      288 Oct 15 21:30 ..
--rw-r--r--   1 runner  staff   201653 Oct 15 21:30 Auto_Foto_Clip.mp4
--rw-r--r--   1 runner  staff    71905 Oct 15 21:30 C0001.MP4
--rw-r--r--   1 runner  staff    59331 Oct 15 21:30 C0002.MP4
--rw-r--r--   1 runner  staff      168 Oct 15 21:30 C0002M01.XML
--rw-r--r--   1 runner  staff    71889 Oct 15 21:30 C0003.MP4
--rw-r--r--   1 runner  staff  1418612 Oct 15 21:30 DJI_0162.MP4
--rw-r--r--   1 runner  staff   192907 Oct 15 21:30 DJI_0162.SRT
--rw-r--r--   1 runner  staff  2158491 Oct 15 21:30 DJI_20250426155228_0038_D_M3P.LRF
--rw-r--r--   1 runner  staff  2158491 Oct 15 21:30 DJI_20250426155228_0038_D_M3P.MP4
--rw-r--r--   1 runner  staff     1895 Oct 15 21:30 DJI_20250426155228_0038_D_M3P.SRT
--rw-r--r--   1 runner  staff    29629 Oct 15 21:30 IMG_0001.MOV
--rw-r--r--   1 runner  staff    27984 Oct 15 21:30 IMG_0002.JPG
--rw-r--r--   1 runner  staff    16526 Oct 15 21:30 Musik_Intro.mp3
--rw-r--r--   1 runner  staff       10 Oct 15 21:30 Notiz.abc
--rw-r--r--   1 runner  staff      165 Oct 15 21:30 Projekt.zip
-drwxr-xr-x   3 runner  staff       96 Oct 15 21:30 Unterordner
+drwxr-xr-x  18 runner  staff      576 Oct 15 21:38 .
+drwxr-xr-x   9 runner  staff      288 Oct 15 21:38 ..
+-rw-r--r--   1 runner  staff   201653 Oct 15 21:38 Auto_Foto_Clip.mp4
+-rw-r--r--   1 runner  staff    71905 Oct 15 21:38 C0001.MP4
+-rw-r--r--   1 runner  staff    59331 Oct 15 21:38 C0002.MP4
+-rw-r--r--   1 runner  staff      168 Oct 15 21:38 C0002M01.XML
+-rw-r--r--   1 runner  staff    71889 Oct 15 21:38 C0003.MP4
+-rw-r--r--   1 runner  staff  1418612 Oct 15 21:38 DJI_0162.MP4
+-rw-r--r--   1 runner  staff   192907 Oct 15 21:38 DJI_0162.SRT
+-rw-r--r--   1 runner  staff  2158491 Oct 15 21:38 DJI_20250426155228_0038_D_M3P.LRF
+-rw-r--r--   1 runner  staff  2158491 Oct 15 21:38 DJI_20250426155228_0038_D_M3P.MP4
+-rw-r--r--   1 runner  staff     1895 Oct 15 21:38 DJI_20250426155228_0038_D_M3P.SRT
+-rw-r--r--   1 runner  staff    29629 Oct 15 21:38 IMG_0001.MOV
+-rw-r--r--   1 runner  staff    27984 Oct 15 21:38 IMG_0002.JPG
+-rw-r--r--   1 runner  staff    16526 Oct 15 21:38 Musik_Intro.mp3
+-rw-r--r--   1 runner  staff       10 Oct 15 21:38 Notiz.abc
+-rw-r--r--   1 runner  staff      165 Oct 15 21:38 Projekt.zip
+drwxr-xr-x   3 runner  staff       96 Oct 15 21:38 Unterordner
