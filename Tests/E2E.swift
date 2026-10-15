@@ -35,6 +35,7 @@ struct E2E {
         let gyro = GyroRunner(store: store, sorter: sorter)
         let tagger = TagRunner()
         let theme = ThemeSettings()
+        let timelineM = TimelineModel()
 
         func render<V: View>(_ v: V, _ name: String, w: CGFloat = 580, h: CGFloat = 780, sheet: Bool = false) {
             let content = Group {
@@ -48,7 +49,7 @@ struct E2E {
                 }
             }
             .environmentObject(sorter).environmentObject(store).environmentObject(theme)
-            .environmentObject(gyro).environmentObject(tagger)
+            .environmentObject(gyro).environmentObject(tagger).environmentObject(timelineM)
             .frame(width: w, height: h)
             .environment(\.colorScheme, .dark)
             let r = ImageRenderer(content: content)
@@ -218,6 +219,22 @@ struct E2E {
               ((try? fmx.subpathsOfDirectory(atPath: dest.path)) ?? []).allSatisfy { !$0.hasSuffix("C0050.MP4") }, "Import: alter Tag NICHT kopiert")
         check(fmx.fileExists(atPath: clipDir.appendingPathComponent("C0101.MP4").path), "Karte bleibt unverändert")
         report.append("ℹ️ Import-Fehler: \(imp.errors.isEmpty ? "keine" : imp.errors.joined(separator: " | "))")
+
+        // 6c) Zeitleiste: zwei Clips mit überlappender Aufnahmezeit → „parallel“
+        let tlClips = await TimelineModel.collect([root])
+        let tlGroups = TimelineModel.group(tlClips)
+        check(tlClips.count >= 5, "Zeitleiste liest Aufnahmezeiten aus allen Unterordnern (\(tlClips.count) Clips)")
+        let base = Date()
+        let fake = [
+            TimelineModel.Clip(url: URL(fileURLWithPath: "/a/C0001.MP4"), camera: "Sony Alpha 1", start: base, end: base.addingTimeInterval(60), fromMetadata: true),
+            TimelineModel.Clip(url: URL(fileURLWithPath: "/b/C0002.MP4"), camera: "Sony ZV-E1", start: base.addingTimeInterval(20), end: base.addingTimeInterval(90), fromMetadata: true),
+            TimelineModel.Clip(url: URL(fileURLWithPath: "/a/C0003.MP4"), camera: "Sony Alpha 1", start: base.addingTimeInterval(300), end: base.addingTimeInterval(320), fromMetadata: true),
+        ]
+        let fg = TimelineModel.group(fake)
+        check(fg.count == 2 && fg[0].isParallel && !fg[1].isParallel, "Überlappende Clips zweier Kameras → als „parallel“ erkannt")
+        timelineM.groups = fg + tlGroups; timelineM.count = 3 + tlClips.count
+        render(TimelineSheet(), "16-zeitleiste", w: 620, h: 680, sheet: true)
+        if let sm = TimelineModel.makeSmartFolder(in: root) { check(FileManager.default.fileExists(atPath: sm.path), "Finder-Ansicht „Alle Clips nach Zeit“ angelegt") }
 
         // 7) Weitere Ansichten
         render(SettingsView(), "12-einstellungen", w: 480, h: 620, sheet: true)

@@ -11,6 +11,7 @@ struct CamSortApp: App {
     @StateObject private var theme = ThemeSettings()
     @StateObject private var gyro: GyroRunner
     @StateObject private var tagger = TagRunner()
+    @StateObject private var timeline = TimelineModel()
     @StateObject private var importer: ImportRunner
 
     init() {
@@ -31,6 +32,7 @@ struct CamSortApp: App {
                 .environmentObject(gyro)
                 .environmentObject(tagger)
                 .environmentObject(importer)
+                .environmentObject(timeline)
                 .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
@@ -61,6 +63,7 @@ struct ContentView: View {
     @EnvironmentObject var gyro: GyroRunner
     @EnvironmentObject var tagger: TagRunner
     @EnvironmentObject var importer: ImportRunner
+    @EnvironmentObject var timeline: TimelineModel
 
     var body: some View {
         ZStack {
@@ -96,6 +99,9 @@ struct ContentView: View {
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: gyro.active)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: tagger.active)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: importer.active)
+        .sheet(isPresented: $timeline.show) {
+            TimelineSheet().environmentObject(timeline).environmentObject(sorter)
+        }
         .sheet(item: $sorter.pendingDuplicate) { req in
             DuplicateSheet(request: req).environmentObject(sorter)
         }
@@ -170,6 +176,7 @@ struct Header: View {
 // MARK: - Start
 
 struct IdleView: View {
+    @EnvironmentObject var timeline: TimelineModel
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var store: LearnedStore
     @EnvironmentObject var importer: ImportRunner
@@ -284,6 +291,14 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
 
+            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
+                Button { timeline.open(folders: sorter.folders) } label: {
+                    Label("Zeitleiste – was wurde parallel gefilmt?", systemImage: "clock.arrow.2.circlepath")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .frame(maxWidth: .infinity).frame(height: 38)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                }.buttonStyle(.plain)
+            }
             if (store.autoGyro || store.showGyroButton),
                sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
                 HStack(spacing: 8) {
@@ -408,6 +423,7 @@ struct DoneView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var gyro: GyroRunner
     @EnvironmentObject var tagger: TagRunner
+    @EnvironmentObject var timeline: TimelineModel
     @EnvironmentObject var store: LearnedStore
     @State private var pop = false
     @State private var showProblems = true
@@ -485,6 +501,13 @@ struct DoneView: View {
                 }
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
+
+            Button { timeline.open(folders: sorter.folders) } label: {
+                Label("Zeitleiste – was wurde parallel gefilmt?", systemImage: "clock.arrow.2.circlepath")
+                    .frame(maxWidth: .infinity).frame(height: 40)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+            }.buttonStyle(.plain)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
 
             HStack(spacing: 12) {
                 Button { sorter.revealInFinder() } label: {

@@ -20,7 +20,7 @@ struct ScreenshotTool {
         sorter.hints = ["Gyroflow-Knopf: schickt die Sony-Clips nacheinander an Gyroflow"]
         sorter.phase = .done
         let view = ContentView()
-            .environmentObject(sorter).environmentObject(store).environmentObject(theme).environmentObject(gyro).environmentObject(TagRunner()).environmentObject(ImportRunner(sorter: sorter))
+            .environmentObject(sorter).environmentObject(store).environmentObject(theme).environmentObject(gyro).environmentObject(TagRunner()).environmentObject(ImportRunner(sorter: sorter)).environmentObject(TimelineModel())
             .frame(width: 580, height: 780)
             .environment(\.colorScheme, .dark)
         let r = ImageRenderer(content: view)
