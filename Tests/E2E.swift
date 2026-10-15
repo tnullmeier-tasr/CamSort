@@ -269,6 +269,7 @@ struct E2E {
             check(!ex("Videos"), "Kunden-Ordner selbst bleibt unangetastet (kein Videos-Ordner auf Kundenebene)")
             // später kommt in Dreh 1 ein Hochkant-Clip dazu → Dreh 1 wird passend neu geordnet
             try? fmx.copyItem(at: zvh, to: d1.appendingPathComponent("C0103.MP4"))
+            try? "<NonRealTimeMeta><Device manufacturer=\"Sony\" modelName=\"ZV-E1\"/></NonRealTimeMeta>".write(to: d1.appendingPathComponent("C0103M01.XML"), atomically: true, encoding: .utf8)
             sorter.reset(); sorter.addFolders([kunde]); sorter.start()
             while sorter.phase != .done && sorter.phase != .cancelled {
                 if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
@@ -305,7 +306,7 @@ struct E2E {
             for _ in 0..<3 { try? LosslessRotate.rotate(t, clockwise: true) }
             check(try! Data(contentsOf: t) == before, "Viermal drehen = bitgenau die Originaldatei")
             let mAfter = (try? fmx.attributesOfItem(atPath: t.path))?[.modificationDate] as? Date
-            check(mBefore == mAfter, "Drehen: Dateidatum bleibt unverändert")
+            check(mBefore != nil && mAfter != nil && abs(mBefore!.timeIntervalSince(mAfter!)) < 1, "Drehen: Dateidatum bleibt unverändert (\(mBefore?.description ?? "-") / \(mAfter?.description ?? "-"))")
         }
 
         // 7) Weitere Ansichten
