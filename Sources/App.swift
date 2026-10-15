@@ -12,6 +12,7 @@ struct CamSortApp: App {
     @StateObject private var gyro: GyroRunner
     @StateObject private var tagger = TagRunner()
     @StateObject private var timeline = TimelineModel()
+    @StateObject private var browser = ClipBrowser()
     @StateObject private var importer: ImportRunner
 
     init() {
@@ -33,6 +34,7 @@ struct CamSortApp: App {
                 .environmentObject(tagger)
                 .environmentObject(importer)
                 .environmentObject(timeline)
+                .environmentObject(browser)
                 .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
@@ -64,6 +66,7 @@ struct ContentView: View {
     @EnvironmentObject var tagger: TagRunner
     @EnvironmentObject var importer: ImportRunner
     @EnvironmentObject var timeline: TimelineModel
+    @EnvironmentObject var browser: ClipBrowser
 
     var body: some View {
         ZStack {
@@ -99,6 +102,7 @@ struct ContentView: View {
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: gyro.active)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: tagger.active)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: importer.active)
+        .background(Color.clear.sheet(isPresented: $browser.show) { ClipBrowserSheet().environmentObject(browser) })
         .sheet(isPresented: $timeline.show) {
             TimelineSheet().environmentObject(timeline).environmentObject(sorter)
         }
@@ -177,6 +181,7 @@ struct Header: View {
 
 struct IdleView: View {
     @EnvironmentObject var timeline: TimelineModel
+    @EnvironmentObject var browser: ClipBrowser
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var store: LearnedStore
     @EnvironmentObject var importer: ImportRunner
@@ -292,12 +297,19 @@ struct IdleView: View {
             .disabled(sorter.folders.isEmpty)
 
             if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
-                Button { timeline.open(folders: sorter.folders) } label: {
-                    Label("Zeitleiste – was wurde parallel gefilmt?", systemImage: "clock.arrow.2.circlepath")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .frame(maxWidth: .infinity).frame(height: 38)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
-                }.buttonStyle(.plain)
+                HStack(spacing: 10) {
+                    Button { timeline.open(folders: sorter.folders) } label: {
+                        Label("Zeitleiste", systemImage: "clock.arrow.2.circlepath")
+                            .frame(maxWidth: .infinity).frame(height: 38)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                    }.buttonStyle(.plain)
+                    Button { browser.open(folders: sorter.folders) } label: {
+                        Label("Ansehen & drehen", systemImage: "rotate.right")
+                            .frame(maxWidth: .infinity).frame(height: 38)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                    }.buttonStyle(.plain)
+                }
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
             }
             if (store.autoGyro || store.showGyroButton),
                sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
@@ -424,6 +436,7 @@ struct DoneView: View {
     @EnvironmentObject var gyro: GyroRunner
     @EnvironmentObject var tagger: TagRunner
     @EnvironmentObject var timeline: TimelineModel
+    @EnvironmentObject var browser: ClipBrowser
     @EnvironmentObject var store: LearnedStore
     @State private var pop = false
     @State private var showProblems = true
@@ -502,11 +515,18 @@ struct DoneView: View {
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
 
-            Button { timeline.open(folders: sorter.folders) } label: {
-                Label("Zeitleiste – was wurde parallel gefilmt?", systemImage: "clock.arrow.2.circlepath")
-                    .frame(maxWidth: .infinity).frame(height: 40)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
-            }.buttonStyle(.plain)
+            HStack(spacing: 10) {
+                Button { timeline.open(folders: sorter.folders) } label: {
+                    Label("Zeitleiste", systemImage: "clock.arrow.2.circlepath")
+                        .frame(maxWidth: .infinity).frame(height: 40)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                }.buttonStyle(.plain)
+                Button { browser.open(folders: sorter.folders) } label: {
+                    Label("Ansehen & drehen", systemImage: "rotate.right")
+                        .frame(maxWidth: .infinity).frame(height: 40)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                }.buttonStyle(.plain)
+            }
             .font(.system(size: 13, weight: .semibold, design: .rounded))
 
             HStack(spacing: 12) {
@@ -797,11 +817,11 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     section("Sortieren")
-                    WithHelp(title: "Kompakte Ordner", text: "An (empfohlen): Pro Dreh gibt es nur die Unterscheidungen als Ordner, die es dort wirklich gibt – alles in einer Ebene, z. B. Videos/Sony A1 · Quer. Hast du nur mit einer Kamera gefilmt, fällt der Kameraname weg; ist alles quer, fällt „Quer“ weg. XML, LRF und SRT landen gemeinsam in „Begleitdateien“. Kommt später etwas Neues dazu, ordnet CamSort den Dreh beim Aktualisieren passend neu.\n\nEin Dreh ist jeder Ordner mit Clips – bei Kundenordnern also jeder Unterordner. Kartenordner wie DCIM oder PRIVATE zählen zum Dreh darüber.\n\nAus: ausführliche Struktur mit eigenem Ordner pro Ebene (Videos/Kamera/Quer).") {
+                    WithHelp(title: "Kompakte Ordner", text: "An (empfohlen): Alle Merkmale stehen in EINEM Ordnernamen statt in verschachtelten Ordnern – z. B. Videos/Sony Alpha 1 · FE 24-70 · Quer. So siehst du sofort, was drin ist, und bist mit einem Klick beim Clip. Neue Ordner entstehen nur, wenn es im Dreh wirklich etwas anderes gibt (zweite Kamera, Hochkant-Clips …). XML, LRF und SRT landen gemeinsam in „Begleitdateien“.\n\nEin Dreh ist jeder Ordner mit Clips – bei Kundenordnern also jeder Unterordner. Kartenordner wie DCIM oder PRIVATE zählen zum Dreh darüber.\n\nAus: ausführliche Struktur mit eigenem Ordner pro Ebene (Videos/Kamera/Quer).") {
                         Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
                     }
                     Text(store.compactLayout
-                         ? "Beispiel: Dreh 1/Videos/Sony A1 · Quer · Dreh 2/Videos (nur eine Kamera, alles quer)"
+                         ? "Beispiel: Dreh 1/Videos/Sony Alpha 1 · FE 24-70 · Quer"
                          : "Beispiel: Dreh 1/Videos/Sony Alpha 1/Quer")
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     WithHelp(title: "Unterordner durchsuchen", text: "An: CamSort schaut auch in alle Unterordner des gewählten Ordners und sortiert jede Datei in dem Ordner ein, in dem sie liegt. Ordner, die CamSort selbst angelegt hat (Videos, Fotos, XML …), werden dabei übersprungen.\nAus: Nur Dateien, die direkt im gewählten Ordner liegen, werden sortiert.") {

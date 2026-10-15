@@ -1,5 +1,6 @@
 #if E2E
 import SwiftUI
+import AVFoundation
 import AppKit
 
 /// End-to-End-Test: sortiert einen echten Testordner, prüft das Ergebnis und rendert alle Ansichten als Bilder.
@@ -50,7 +51,7 @@ struct E2E {
                 }
             }
             .environmentObject(sorter).environmentObject(store).environmentObject(theme)
-            .environmentObject(gyro).environmentObject(tagger).environmentObject(timelineM)
+            .environmentObject(gyro).environmentObject(tagger).environmentObject(timelineM).environmentObject(ClipBrowser())
             .frame(width: w, height: h)
             .environment(\.colorScheme, .dark)
             let r = ImageRenderer(content: content)
@@ -261,7 +262,7 @@ struct E2E {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
             func ex(_ p: String) -> Bool { fmx.fileExists(atPath: kunde.appendingPathComponent(p).path) }
-            check(ex("Dreh 1/Videos/C0101.MP4") && ex("Dreh 1/Videos/C0102.MP4"), "Kompakt: nur eine Kamera, alles quer → direkt in Dreh 1/Videos (keine Unterordner)")
+            check(ex("Dreh 1/Videos/Sony Alpha 1 · Quer/C0101.MP4") && ex("Dreh 1/Videos/Sony Alpha 1 · Quer/C0102.MP4"), "Kompakt: eine Ebene, Name mit Kamera und Ausrichtung → Dreh 1/Videos/Sony Alpha 1 · Quer")
             check(ex("Dreh 2/Videos/Sony Alpha 1 · Quer/C0201.MP4"), "Kompakt: Clip von der Karte zählt zum Dreh 2 → Videos/Sony Alpha 1 · Quer")
             check(ex("Dreh 2/Videos/Sony ZV-E1 · Hochkant/C0202.MP4"), "Kompakt: zweite Kamera → Videos/Sony ZV-E1 · Hochkant")
             check(ex("Dreh 2/Begleitdateien/C0202M01.XML"), "Kompakt: XML → Begleitdateien")
@@ -277,9 +278,34 @@ struct E2E {
             }
             let tree = ((try? fmx.subpathsOfDirectory(atPath: kunde.path)) ?? []).filter { !$0.hasSuffix(".DS_Store") }.sorted()
             check(ex("Dreh 1/Videos/Sony Alpha 1 · Quer/C0101.MP4") && ex("Dreh 1/Videos/Sony ZV-E1 · Hochkant/C0103.MP4"),
-                  "Aktualisieren: neue Kamera in Dreh 1 → Dreh 1 wird neu geordnet")
+                  "Aktualisieren: neuer Clip in Dreh 1 bekommt eigenen Ordner, bestehende bleiben")
             report.append("ℹ️ Kompakt-Struktur: " + tree.joined(separator: " | "))
             store.compactLayout = false
+        }
+
+        // 6e) Verlustfrei drehen
+        do {
+            let fmx = FileManager.default
+            let src = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")
+            let t = root.deletingLastPathComponent().appendingPathComponent("Drehtest.MP4")
+            try? fmx.removeItem(at: t); try? fmx.copyItem(at: src, to: t)
+            let before = try? Data(contentsOf: t)
+            let mBefore = (try? fmx.attributesOfItem(atPath: t.path))?[.modificationDate] as? Date
+            var ok = true
+            do { try LosslessRotate.rotate(t, clockwise: true) } catch { ok = false; report.append("ℹ️ Drehfehler: \(error)") }
+            let after1 = try? Data(contentsOf: t)
+            let tr = AVURLAsset(url: t).tracks(withMediaType: .video).first
+            let r = tr.map { $0.naturalSize.applying($0.preferredTransform) }
+            check(ok && r != nil && abs(r!.height) > abs(r!.width), "Drehen: Quer-Clip ist danach Hochkant")
+            check(before?.count == after1?.count, "Drehen: Dateigröße identisch (nichts neu berechnet)")
+            var diff = 0
+            if let b = before, let a = after1 { for i in 0..<min(b.count, a.count) where b[i] != a[i] { diff += 1 } }
+            check(diff > 0 && diff <= 36, "Drehen: nur die Dreh-Angabe geändert (\(diff) Byte von \(before?.count ?? 0))")
+            check(after1?.range(of: Data("manufacturer=\"Sony\"".utf8)) != nil, "Drehen: eingebettete Sony-Metadaten erhalten")
+            for _ in 0..<3 { try? LosslessRotate.rotate(t, clockwise: true) }
+            check(try! Data(contentsOf: t) == before, "Viermal drehen = bitgenau die Originaldatei")
+            let mAfter = (try? fmx.attributesOfItem(atPath: t.path))?[.modificationDate] as? Date
+            check(mBefore == mAfter, "Drehen: Dateidatum bleibt unverändert")
         }
 
         // 7) Weitere Ansichten

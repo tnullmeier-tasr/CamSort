@@ -511,18 +511,14 @@ final class Sorter: ObservableObject {
         var byDreh: [URL: [Info]] = [:]
         for i in infos { byDreh[Self.drehRoot(i.job.dir), default: []].append(i) }
         for (dreh, list) in byDreh {
-            let multiCam = Set(list.map(\.cam)).count > 1
-            let multiLens = Set(list.map { $0.lens ?? "" }).count > 1
-            let multiSpeed = Set(list.map { $0.speed ?? "" }).count > 1
-            let multiOrient = Set(list.map { $0.orient ?? "?" }).count > 1
             for i in list {
                 if Task.isCancelled { return false }
                 currentFile = i.job.url.lastPathComponent
-                var parts: [String] = []
-                if multiCam { parts.append(i.cam) }
-                if multiLens, let l = i.lens { parts.append(l) }
-                if multiSpeed, let s = i.speed { parts.append(s) }
-                if multiOrient, let o = i.orient { parts.append(o) }
+                // Immer eine Ebene, Name enthält alle Merkmale – so erkennt man den Ordner sofort.
+                var parts: [String] = [i.cam]
+                if let l = i.lens { parts.append(l) }
+                if let s = i.speed { parts.append(s) }
+                if let o = i.orient { parts.append(o) }
                 var target = dreh.appendingPathComponent("Videos")
                 if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: " · "))) }
                 let here = i.job.url.deletingLastPathComponent().standardizedFileURL.path
