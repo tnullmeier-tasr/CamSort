@@ -2,12 +2,19 @@ name: Build CamSort
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   workflow_dispatch:
 permissions:
   contents: write
+
+# Sparsam: ein neuer Push bricht einen laufenden Build ab.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - name: SRT-Test
@@ -17,6 +24,7 @@ jobs:
           swiftc t/*.swift -o srttest 2> err.txt || { echo "::error::$(head -c 800 err.txt | tr '\n' ' ')"; exit 1; }
           echo "::notice::SRT-Test: $(./srttest Tests/DJI_0162.SRT | tr '\n' ' ')"
       - name: Gyroflow-CLI-Test
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[test]')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -37,6 +45,7 @@ jobs:
             ls test_stabilized* 2>/dev/null && echo "::notice::Ausgabedatei erzeugt"
           fi
       - name: Screenshot
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[test]')
         continue-on-error: true
         run: |
           swiftc -D SCREENSHOT -parse-as-library Sources/*.swift Tests/Screenshot.swift -o shot 2> err.txt || { echo "::error::$(head -c 900 err.txt | tr '\n' ' ')"; exit 1; }
@@ -44,6 +53,7 @@ jobs:
           git config user.name "CamSort CI"; git config user.email "ci@users.noreply.github.com"
           git add docs/screenshot-fertig.png && git commit -m "Screenshot aktualisiert [skip ci]" && git push || true
       - name: Cloud-Test (E2E)
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[test]')
         continue-on-error: true
         run: |
           which ffmpeg || brew install ffmpeg >/dev/null 2>&1
@@ -61,6 +71,7 @@ jobs:
       - name: Build
         run: ./build.sh
       - name: Echtes Bildschirmfoto
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[test]')
         continue-on-error: true
         run: |
           open build/CamSort.app; sleep 8
