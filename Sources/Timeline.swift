@@ -72,7 +72,11 @@ final class TimelineModel: ObservableObject {
     /// Kamera = Ordner direkt unter „Videos“, sonst Elternordner
     nonisolated static func camera(of u: URL) -> String {
         let c = u.pathComponents
-        if let i = c.lastIndex(of: "Videos"), i + 1 < c.count - 1 { return c[i + 1] }
+        if let i = c.lastIndex(of: "Videos"), i + 1 < c.count - 1 {
+            let n = c[i + 1].components(separatedBy: " · ").first ?? c[i + 1]
+            return ["Hochkant", "Quer", "Stand", "Fahrt", "Dazwischen", "Ohne GPS"].contains(n) ? "Kamera" : n
+        }
+        if c.last(where: { $0 == "Videos" }) != nil { return "Kamera" }
         return u.deletingLastPathComponent().lastPathComponent
     }
 

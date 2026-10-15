@@ -31,6 +31,7 @@ struct E2E {
         store.includeSubfolders = true
         store.sortByLens = false
         store.droneBySpeed = true
+        store.compactLayout = false
         let sorter = Sorter(store: store)
         let gyro = GyroRunner(store: store, sorter: sorter)
         let tagger = TagRunner()
@@ -235,6 +236,51 @@ struct E2E {
         timelineM.groups = fg + tlGroups; timelineM.count = 3 + tlClips.count
         render(TimelineSheet(), "16-zeitleiste", w: 620, h: 680, sheet: true)
         if let sm = TimelineModel.makeSmartFolder(in: root) { check(FileManager.default.fileExists(atPath: sm.path), "Finder-Ansicht „Alle Clips nach Zeit“ angelegt") }
+
+        // 6d) Kompakte Struktur mit Kunden- und Dreh-Ordnern
+        do {
+            let fmx = FileManager.default
+            let kunde = root.deletingLastPathComponent().appendingPathComponent("Kunde Müller")
+            let d1 = kunde.appendingPathComponent("Dreh 1"), d2 = kunde.appendingPathComponent("Dreh 2")
+            let card = d2.appendingPathComponent("Karte A/PRIVATE/M4ROOT/CLIP")
+            for d in [d1, d2, card] { try? fmx.createDirectory(at: d, withIntermediateDirectories: true) }
+            let a1q = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")
+            let zvh = root.appendingPathComponent("Videos/Sony ZV-E1/Hochkant/C0002.MP4")
+            try? fmx.copyItem(at: a1q, to: d1.appendingPathComponent("C0101.MP4"))           // Dreh 1: nur A1, nur quer
+            try? fmx.copyItem(at: a1q, to: d1.appendingPathComponent("C0102.MP4"))
+            try? fmx.copyItem(at: a1q, to: card.appendingPathComponent("C0201.MP4"))         // Dreh 2: A1 quer (auf Karte) …
+            try? fmx.copyItem(at: zvh, to: d2.appendingPathComponent("C0202.MP4"))           // … + ZV-E1 hochkant
+            try? fmx.copyItem(at: root.appendingPathComponent("XML/C0002M01.XML"), to: d2.appendingPathComponent("C0202M01.XML"))
+            store.compactLayout = true
+            store.droneBySpeed = false
+            sorter.reset(); sorter.addFolders([kunde]); sorter.start()
+            while sorter.phase != .done && sorter.phase != .cancelled {
+                if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
+                if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            func ex(_ p: String) -> Bool { fmx.fileExists(atPath: kunde.appendingPathComponent(p).path) }
+            check(ex("Dreh 1/Videos/C0101.MP4") && ex("Dreh 1/Videos/C0102.MP4"), "Kompakt: nur eine Kamera, alles quer → direkt in Dreh 1/Videos (keine Unterordner)")
+            check(ex("Dreh 2/Videos/Sony Alpha 1 · Quer/C0201.MP4"), "Kompakt: Clip von der Karte zählt zum Dreh 2 → Videos/Sony Alpha 1 · Quer")
+            check(ex("Dreh 2/Videos/Sony ZV-E1 · Hochkant/C0202.MP4"), "Kompakt: zweite Kamera → Videos/Sony ZV-E1 · Hochkant")
+            check(ex("Dreh 2/Begleitdateien/C0202M01.XML"), "Kompakt: XML → Begleitdateien")
+            check(!ex("Videos"), "Kunden-Ordner selbst bleibt unangetastet (kein Videos-Ordner auf Kundenebene)")
+            // später kommt in Dreh 1 ein Hochkant-Clip dazu → Dreh 1 wird passend neu geordnet
+            try? fmx.copyItem(at: zvh, to: d1.appendingPathComponent("C0103.MP4"))
+            sorter.reset(); sorter.addFolders([kunde]); sorter.start()
+            while sorter.phase != .done && sorter.phase != .cancelled {
+                if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
+                if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let tree = ((try? fmx.subpathsOfDirectory(atPath: kunde.path)) ?? []).filter { !$0.hasSuffix(".DS_Store") }.sorted()
+            check(ex("Dreh 1/Videos/Sony Alpha 1 · Quer/C0101.MP4") && ex("Dreh 1/Videos/Sony ZV-E1 · Hochkant/C0103.MP4"),
+                  "Aktualisieren: neue Kamera in Dreh 1 → Dreh 1 wird neu geordnet")
+            report.append("ℹ️ Kompakt-Struktur: " + tree.joined(separator: " | "))
+            store.compactLayout = false
+        }
 
         // 7) Weitere Ansichten
         render(SettingsView(), "12-einstellungen", w: 480, h: 620, sheet: true)

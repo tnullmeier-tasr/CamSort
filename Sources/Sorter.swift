@@ -294,6 +294,10 @@ final class Sorter: ObservableObject {
                     if Self.projectExt.contains(ext) { out.append((u.deletingLastPathComponent(), u, ext)) }
                     return false
                 }
+                if store.compactLayout && u.lastPathComponent == "Videos" { return true }
+                if store.compactLayout && u.pathComponents.contains("Videos") {
+                    return !["Stabilisiert", "Original", "Gyroflow-Projekte"].contains(u.lastPathComponent)
+                }
                 return !outNames.contains(u.lastPathComponent)
             }
             if v?.isRegularFile == true { out.append((u.deletingLastPathComponent(), u, ext)) }
@@ -355,6 +359,31 @@ final class Sorter: ObservableObject {
             case .ignore: if !Self.alwaysIgnore.contains(f.ext) { ignored += 1 }
             default: others.append(job)
             }
+        }
+
+        if store.compactLayout {
+            total = videos.count + others.count
+            phase = .sorting
+            guard await layoutCompact(videos, siblings: siblings) else { phase = .cancelled; return }
+            for job in others {
+                if Task.isCancelled { phase = .cancelled; return }
+                currentFile = job.url.lastPathComponent
+                guard fm.fileExists(atPath: job.url.path) else { processed += 1; continue }
+                let dreh = Self.drehRoot(job.dir)
+                switch job.cat {
+                case .side:
+                    if await move(job.url, to: dreh.appendingPathComponent("Begleitdateien")) { sideCounts[job.ext.uppercased(), default: 0] += 1 }
+                case .photo:
+                    if await move(job.url, to: dreh.appendingPathComponent("Fotos")) { counts["Fotos", default: 0] += 1 }
+                case .music, .archive, .project:
+                    let folder = job.cat.folder ?? "Sonstiges"
+                    if await move(job.url, to: dreh.appendingPathComponent(folder)) { sideCounts[folder, default: 0] += 1 }
+                default: break
+                }
+                processed += 1
+            }
+            currentFile = ""
+            return
         }
 
         let jobs = videos + others
@@ -424,6 +453,103 @@ final class Sorter: ObservableObject {
             processed += 1
         }
         currentFile = ""
+    }
+
+    // MARK: Kompakte Struktur
+
+    static let cardMarkers: Set<String> = ["DCIM", "PRIVATE", "M4ROOT", "CLIP", "AVCHD", "MP_ROOT", "100MEDIA", "101MEDIA"]
+
+    /// Dreh-Ordner: über „Videos“ bzw. über Kartenordnern (DCIM, PRIVATE …), sonst der Ordner selbst.
+    static func drehRoot(_ dir: URL) -> URL {
+        let c = dir.pathComponents
+        if let i = c.firstIndex(of: "Videos") { return URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i]))) }
+        if let i = c.firstIndex(where: { cardMarkers.contains($0.uppercased()) }) {
+            return URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i])))
+        }
+        return dir
+    }
+
+    private func sidecar(_ stem: String, exts: [String], near dir: URL) -> URL? {
+        let dreh = Self.drehRoot(dir)
+        let dirs = [dir, dreh.appendingPathComponent("Begleitdateien"), dreh.appendingPathComponent("SRT")]
+        for d in dirs { for e in exts {
+            let u = d.appendingPathComponent(stem + e)
+            if fm.fileExists(atPath: u.path) { return u }
+        } }
+        return nil
+    }
+
+    /// Analysiert alle Videos je Dreh und legt nur die Ordner an, die sich dort unterscheiden.
+    private func layoutCompact(_ videos: [Job], siblings: [URL: Set<String>]) async -> Bool {
+        struct Info { let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String? }
+        var infos: [Info] = []
+        for job in videos {
+            if Task.isCancelled { return false }
+            currentFile = job.url.lastPathComponent
+            let asset = AVURLAsset(url: job.url)
+            let o = await orientation(of: asset)
+            var sib = siblings[job.dir] ?? []
+            let stem = job.url.deletingPathExtension().lastPathComponent
+            if let x = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: job.dir) { sib.insert(x.lastPathComponent) }
+            guard let cam = await camera(for: job.url, asset: asset, siblings: sib) else { return false }
+            var lens: String? = nil
+            if store.sortByLens { lens = await lensName(for: job.url, asset: asset, siblings: sib) ?? "Objektiv unbekannt" }
+            var speed: String? = nil
+            if store.droneBySpeed, let srt = sidecar(stem, exts: [".SRT", ".srt"], near: job.dir) {
+                switch SRTSpeed.analyze(srt) {
+                case .speed(let kmh):
+                    speed = kmh >= store.standMin && kmh <= store.standMax ? "Stand"
+                          : kmh >= store.moveMin && kmh <= store.moveMax ? "Fahrt" : "Dazwischen"
+                    hints.append(String(format: "%@: Ø %.1f km/h → %@", job.url.lastPathComponent, kmh, speed!))
+                case .noGPS: speed = "Ohne GPS"
+                case .unreadable: break
+                }
+            }
+            infos.append(Info(job: job, cam: cam, lens: lens, speed: speed, orient: o))
+        }
+        // je Dreh: welche Merkmale unterscheiden sich?
+        var byDreh: [URL: [Info]] = [:]
+        for i in infos { byDreh[Self.drehRoot(i.job.dir), default: []].append(i) }
+        for (dreh, list) in byDreh {
+            let multiCam = Set(list.map(\.cam)).count > 1
+            let multiLens = Set(list.map { $0.lens ?? "" }).count > 1
+            let multiSpeed = Set(list.map { $0.speed ?? "" }).count > 1
+            let multiOrient = Set(list.map { $0.orient ?? "?" }).count > 1
+            for i in list {
+                if Task.isCancelled { return false }
+                currentFile = i.job.url.lastPathComponent
+                var parts: [String] = []
+                if multiCam { parts.append(i.cam) }
+                if multiLens, let l = i.lens { parts.append(l) }
+                if multiSpeed, let s = i.speed { parts.append(s) }
+                if multiOrient, let o = i.orient { parts.append(o) }
+                var target = dreh.appendingPathComponent("Videos")
+                if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: " · "))) }
+                let here = i.job.url.deletingLastPathComponent().standardizedFileURL.path
+                var ok = here == target.standardizedFileURL.path
+                if !ok { ok = await move(i.job.url, to: target) }
+                if ok {
+                    counts[i.orient ?? "Video", default: 0] += 1
+                    cameras[i.cam, default: 0] += 1
+                    if let l = i.lens { lenses[l, default: 0] += 1 }
+                    if let s = i.speed { speeds[s, default: 0] += 1 }
+                }
+                processed += 1
+            }
+        }
+        // leer gewordene alte Unterordner unter „Videos“ aufräumen
+        for dreh in byDreh.keys { removeEmptyDirs(dreh.appendingPathComponent("Videos")) }
+        return true
+    }
+
+    private func removeEmptyDirs(_ root: URL) {
+        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: []) else { return }
+        var dirs: [URL] = []
+        while let u = en.nextObject() as? URL { if (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { dirs.append(u) } }
+        for d in dirs.sorted(by: { $0.path.count > $1.path.count }) {
+            let items = (try? fm.contentsOfDirectory(atPath: d.path))?.filter { $0 != ".DS_Store" } ?? ["x"]
+            if items.isEmpty { try? fm.removeItem(at: d) }   // nur wirklich leere Ordner
+        }
     }
 
     // MARK: Verschieben

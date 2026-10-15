@@ -390,7 +390,7 @@ struct CountGrid: View {
             ("Fotos", "photo.fill", Color(red: 0.6, green: 0.7, blue: 1), sorter.counts["Fotos"] ?? 0),
         ]
         if let v = sorter.counts["Video"], v > 0 { r.append(("Video", "film", .white, v)) }
-        let icons = ["Stabilisiert": "gyroscope", "Original": "film", "Gyroflow-Projekte": "doc.badge.gearshape",
+        let icons = ["Begleitdateien": "doc.on.doc", "Stabilisiert": "gyroscope", "Original": "film", "Gyroflow-Projekte": "doc.badge.gearshape",
                      "XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft", "Musik": "music.note",
                      "ZIP": "doc.zipper", "FCP": "film.stack"]
         let keys = Set(["XML", "LRF", "SRT"]).union(sorter.sideCounts.keys).sorted()
@@ -797,6 +797,13 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     section("Sortieren")
+                    WithHelp(title: "Kompakte Ordner", text: "An (empfohlen): Pro Dreh gibt es nur die Unterscheidungen als Ordner, die es dort wirklich gibt – alles in einer Ebene, z. B. Videos/Sony A1 · Quer. Hast du nur mit einer Kamera gefilmt, fällt der Kameraname weg; ist alles quer, fällt „Quer“ weg. XML, LRF und SRT landen gemeinsam in „Begleitdateien“. Kommt später etwas Neues dazu, ordnet CamSort den Dreh beim Aktualisieren passend neu.\n\nEin Dreh ist jeder Ordner mit Clips – bei Kundenordnern also jeder Unterordner. Kartenordner wie DCIM oder PRIVATE zählen zum Dreh darüber.\n\nAus: ausführliche Struktur mit eigenem Ordner pro Ebene (Videos/Kamera/Quer).") {
+                        Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
+                    }
+                    Text(store.compactLayout
+                         ? "Beispiel: Dreh 1/Videos/Sony A1 · Quer · Dreh 2/Videos (nur eine Kamera, alles quer)"
+                         : "Beispiel: Dreh 1/Videos/Sony Alpha 1/Quer")
+                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     WithHelp(title: "Unterordner durchsuchen", text: "An: CamSort schaut auch in alle Unterordner des gewählten Ordners und sortiert jede Datei in dem Ordner ein, in dem sie liegt. Ordner, die CamSort selbst angelegt hat (Videos, Fotos, XML …), werden dabei übersprungen.\nAus: Nur Dateien, die direkt im gewählten Ordner liegen, werden sortiert.") {
                         Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
                     }

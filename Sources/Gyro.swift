@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import SwiftUI
 import AppKit
 
@@ -72,14 +73,24 @@ final class GyroRunner: ObservableObject {
                 let stem = u.deletingPathExtension().lastPathComponent.lowercased()
                 if suffixes.contains(where: { stem.contains($0) }) { continue }       // schon stabilisiert
                 let comps = u.pathComponents
-                let group = comps.contains("Hochkant") ? "Hochkant" : comps.contains("Quer") ? "Quer" : nil
-                guard let group, comps.contains("Videos") else { continue }
+                guard comps.contains("Videos") else { continue }
+                let group = comps.contains("Hochkant") || comps.last(where: { $0.contains("Hochkant") }) != nil ? "Hochkant"
+                          : comps.contains("Quer") || comps.last(where: { $0.contains("Quer") }) != nil ? "Quer"
+                          : Self.orientationSync(u)
                 guard hasStabilizedSibling(u, suffixes: suffixes) == false else { continue }
                 guard Self.isSony(u) else { continue }
                 if group == "Hochkant" { h.append(u) } else { q.append(u) }
             }
         }
         return (h.sorted { $0.path < $1.path }, q.sorted { $0.path < $1.path })
+    }
+
+    /// Hochkant/Quer direkt aus dem Video (wenn der Ordnername es nicht verrät)
+    static func orientationSync(_ u: URL) -> String {
+        let a = AVURLAsset(url: u)
+        guard let t = a.tracks(withMediaType: .video).first else { return "Quer" }
+        let r = t.naturalSize.applying(t.preferredTransform)
+        return abs(r.height) > abs(r.width) ? "Hochkant" : "Quer"
     }
 
     private func hasStabilizedSibling(_ u: URL, suffixes: [String]) -> Bool {
