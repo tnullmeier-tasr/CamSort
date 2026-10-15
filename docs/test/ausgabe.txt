@@ -31,12 +31,22 @@ IOServiceMatchingfailed for: AppleM2ScalerParavirtDriver
 - ℹ️ Vergebene Tags gesamt: Auto×1, Fahrzeug×1, Felge×1, Himmel×1, Porsche×1, Rad×1, Reifen×1
 - ℹ️ Tag-Fehler: keine
 - ✅ Video nach dem Taggen unverändert lesbar
-- ✅ Karte: 2 Aufnahmetage erkannt (["Sa., 10.10.2026: 2", "Mo., 31.08.2026: 1"])
+- ✅ Karte: 2 Aufnahmetage erkannt (["Do., 15.10.2026: 2", "Sa., 05.09.2026: 1"])
 - ✅ Sony-Vorschaubilder (THMBNL) werden nicht importiert
 - ✅ Import: neuer Tag kopiert, geprüft und einsortiert
 - ✅ Import: alter Tag NICHT kopiert
 - ✅ Karte bleibt unverändert
 - ℹ️ Import-Fehler: keine
+- ✅ Zeitleiste liest Aufnahmezeiten aus allen Unterordnern (9 Clips)
+- ✅ Überlappende Clips zweier Kameras → als „parallel“ erkannt
+- ✅ Finder-Ansicht „Alle Clips nach Zeit“ angelegt
+- ✅ Kompakt: nur eine Kamera, alles quer → direkt in Dreh 1/Videos (keine Unterordner)
+- ❌ Kompakt: Clip von der Karte zählt zum Dreh 2 → Videos/Sony Alpha 1 · Quer
+- ❌ Kompakt: zweite Kamera → Videos/Sony ZV-E1 · Hochkant
+- ✅ Kompakt: XML → Begleitdateien
+- ✅ Kunden-Ordner selbst bleibt unangetastet (kein Videos-Ordner auf Kundenebene)
+- ❌ Aktualisieren: neue Kamera in Dreh 1 → Dreh 1 wird neu geordnet
+- ℹ️ Kompakt-Struktur: Dreh 1 | Dreh 1/Videos | Dreh 1/Videos/Sony Alpha 1 · Quer | Dreh 1/Videos/Sony Alpha 1 · Quer/C0101.MP4 | Dreh 1/Videos/Sony Alpha 1 · Quer/C0102.MP4 | Dreh 1/Videos/Sony · Hochkant | Dreh 1/Videos/Sony · Hochkant/C0103.MP4 | Dreh 2 | Dreh 2/Begleitdateien | Dreh 2/Begleitdateien/Begleitdateien | Dreh 2/Begleitdateien/Begleitdateien/C0202M01.XML | Dreh 2/Karte A | Dreh 2/Karte A/PRIVATE | Dreh 2/Karte A/PRIVATE/M4ROOT | Dreh 2/Karte A/PRIVATE/M4ROOT/CLIP | Dreh 2/Karte A/Videos | Dreh 2/Karte A/Videos/C0201.MP4 | Dreh 2/Videos | Dreh 2/Videos/C0202.MP4
 
-Fehlgeschlagen: 0
+Fehlgeschlagen: 3
 

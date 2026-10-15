@@ -1,3 +1,4 @@
+./Alle Clips nach Zeit.savedSearch
 ./Fotos
 ./Fotos/IMG_0002.JPG
 ./LRF
