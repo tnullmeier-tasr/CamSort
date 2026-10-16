@@ -402,6 +402,11 @@ final class Sorter: ObservableObject {
                 guard let cam = await camera(for: job.url, asset: asset, siblings: siblings[job.dir] ?? []) else {
                     phase = .cancelled; return
                 }
+                if cam.hasPrefix(LearnedStore.folderPrefix) {
+                    let f = String(cam.dropFirst(LearnedStore.folderPrefix.count))
+                    if await move(job.url, to: job.dir.appendingPathComponent(f)) { sideCounts[f, default: 0] += 1 }
+                    processed += 1; continue
+                }
                 var target = job.dir.appendingPathComponent("Videos").appendingPathComponent(cam)
                 if store.sortByLens {
                     if let lens = await lensName(for: job.url, asset: asset, siblings: siblings[job.dir] ?? []) {
@@ -528,6 +533,9 @@ final class Sorter: ObservableObject {
                 if let o = i.orient { parts.append(o) }
                 var target = dreh.appendingPathComponent("Videos")
                 if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: " · "))) }
+                if i.cam.hasPrefix(LearnedStore.folderPrefix) {   // eigener Ordner (Exporte, Bildschirmaufnahmen …)
+                    target = dreh.appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
+                }
                 let here = i.job.url.deletingLastPathComponent().standardizedFileURL.path
                 var ok = here == target.standardizedFileURL.path
                 if !ok { ok = await move(i.job.url, to: target) }
@@ -696,7 +704,11 @@ final class Sorter: ObservableObject {
         if starts(#"\.INSV$"#) || starts(#"^VID_\d{8}_\d{6}_\d{2}_\d+"#) { return known("Insta360", "Dateiname") }
 
         let p = LearnedStore.prefix(of: name)
-        let hint = starts(#"^\d{8}_\d{6}"#) ? "Vermutlich ein Android-Handy (z. B. Samsung)." : "Kamera nicht erkannt."
+        let low = name.lowercased()
+        let screen = ["bildschirmaufnahme", "aufzeichnung", "screen recording", "screenrecording", "bildschirmfoto"].contains { low.hasPrefix($0) }
+        let hint = screen ? "Sieht nach einer Bildschirmaufnahme aus – nicht von einer Kamera."
+                 : starts(#"^\d{8}_\d{6}"#) ? "Vermutlich ein Android-Handy (z. B. Samsung)."
+                 : "Kamera nicht erkannt – oder ist es ein Export bzw. kein Kamera-Clip? Dann unten einen Ordner wählen."
         return Detection(name: nil, signature: "name:\(p)|\(ext)",
                          label: "Dateiname \(LearnedStore.prefixLabel(p)), Endung .\(ext)", hint: hint)
     }

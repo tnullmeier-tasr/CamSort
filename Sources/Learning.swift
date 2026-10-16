@@ -52,6 +52,9 @@ final class LearnedStore: ObservableObject {
     @Published var enableTagging: Bool { didSet { d.set(enableTagging, forKey: "enableTagging") } }
     /// Kompakt: nur Unterscheidungen als Ordner, die es im Dreh wirklich gibt (Standard)
     @Published var compactLayout: Bool { didSet { d.set(compactLayout, forKey: "compactLayout") } }
+    /// Eigene Ordner für Videos, die nicht von einer Kamera stammen (Exporte, Bildschirmaufnahmen …)
+    @Published var specialFolders: [String] { didSet { d.set(specialFolders, forKey: "specialFolders") } }
+    static let folderPrefix = "📁 "
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
     var gyroSuffixList: [String] {
@@ -69,6 +72,7 @@ final class LearnedStore: ObservableObject {
         moveMin = d.object(forKey: "moveMin") as? Double ?? 5
         moveMax = d.object(forKey: "moveMax") as? Double ?? 100
         autoGyro = d.object(forKey: "autoGyro") as? Bool ?? true
+        specialFolders = d.stringArray(forKey: "specialFolders") ?? ["Finale Videos", "Soundeffekte", "Bildschirmaufnahmen"]
         compactLayout = d.object(forKey: "compactLayout") as? Bool ?? true
         enableTagging = d.object(forKey: "enableTagging") as? Bool ?? false
         showGyroButton = d.object(forKey: "showGyroButton") as? Bool ?? true
@@ -101,5 +105,9 @@ final class LearnedStore: ObservableObject {
 
     func learnExtension(_ ext: String, as cat: FileCategory) { extensions[ext] = cat; save() }
     func removeExtension(_ ext: String) { extensions[ext] = nil; save() }
-    var cameraNames: [String] { Array(Set(rules.map(\.camera))).sorted() }
+    var cameraNames: [String] { Array(Set(rules.map(\.camera).filter { !$0.hasPrefix(Self.folderPrefix) })).sorted() }
+    func addFolder(_ n: String) {
+        let t = n.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
+        if !t.isEmpty && !specialFolders.contains(t) { specialFolders.append(t) }
+    }
 }

@@ -650,6 +650,7 @@ struct CameraSheet: View {
     let request: CameraRequest
     @State private var name = ""
     @State private var remember = true
+    @State private var newFolder = ""
 
     private var suggestions: [String] {
         let base = ["DJI Osmo Action 6", "DJI Mini 5 Pro", "Sony", "iPhone", "Samsung", "Insta360", "Canon", "GoPro"]
@@ -679,6 +680,12 @@ struct CameraSheet: View {
                     }
                 }
             }
+            Divider()
+            Text("Kein Kamera-Clip? In eigenen Ordner legen:").font(.system(size: 12, weight: .semibold))
+            FlowFolders(folders: store.specialFolders, newFolder: $newFolder,
+                        pick: { f in sorter.answerCamera(LearnedStore.folderPrefix + f, remember: remember) },
+                        add: { f in store.addFolder(f); sorter.answerCamera(LearnedStore.folderPrefix + f, remember: remember) })
+            Divider()
             Toggle("Merken – künftig automatisch so einsortieren (\(request.signatureLabel))", isOn: $remember)
                 .font(.system(size: 11))
             Button {
@@ -698,7 +705,7 @@ struct CameraSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 440)
+        .frame(width: 480)
         .interactiveDismissDisabled()
         .onAppear { name = request.suggestion.isEmpty ? (request.hint.contains("DJI") ? "DJI " : "") : request.suggestion }
     }
@@ -833,6 +840,12 @@ struct SettingsView: View {
                     WithHelp(title: "Nach Objektiv sortieren", text: "Legt unter jeder Kamera einen zusätzlichen Ordner pro Objektiv an, z. B. Videos/Sony Alpha 1/FE 24-70mm F2.8 GM II/Quer. Klappt nur, wenn die Kamera das Objektiv mitspeichert – bei Sony zuverlässig. Clips ohne Objektiv-Angabe landen in „Objektiv unbekannt“.") {
                         Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
                     }
+
+                    section("Eigene Ordner")
+                    WithHelp(title: "Eigene Ordner", text: "Für Videos, die nicht von einer Kamera stammen – fertige Exporte, Soundeffekte, Bildschirmaufnahmen, Interviews … Kennt CamSort einen Clip nicht, kannst du ihn im Rückfrage-Fenster mit einem Klick in einen dieser Ordner legen. Mit „Merken“ landen gleichartige Dateien künftig automatisch dort. Die Ordner liegen im jeweiligen Dreh neben „Videos“.") {
+                        Text("Ordner für Exporte, Soundeffekte & Co.").font(.system(size: 12))
+                    }
+                    SpecialFoldersEditor()
 
                     section("Verschlagworten")
                     WithHelp(title: "Verschlagworten aktivieren", text: "An: Nach dem Sortieren erscheint der Knopf „Clips verschlagworten“. CamSort erkennt dann lokal und offline, was in den Clips zu sehen ist (Person, Auto, Motorrad, Straße …), liest Schriftzüge und erkennt so Automarken, und ergänzt alles als Finder-Tags. Die Videodateien werden dabei nicht verändert.\n\nIn Final Cut beim Import „Finder-Tags als Schlagwörter“ anhaken, dann stehen die Begriffe dort direkt als Schlagwörter bereit.\n\nAus: Kein Knopf, keine Analyse.") {
@@ -982,5 +995,58 @@ struct MaybeScroll<C: View>: View {
         #else
         ScrollView(showsIndicators: false) { content }
         #endif
+    }
+}
+
+
+/// Ordner-Knöpfe für „kein Kamera-Clip“ + eigenen Ordner anlegen
+struct FlowFolders: View {
+    let folders: [String]
+    @Binding var newFolder: String
+    let pick: (String) -> Void
+    let add: (String) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 6)], alignment: .leading, spacing: 6) {
+                ForEach(folders, id: \.self) { f in
+                    Button { pick(f) } label: {
+                        Label(f, systemImage: f.lowercased().contains("sound") ? "speaker.wave.2.fill"
+                              : f.lowercased().contains("bildschirm") ? "display" : "folder.fill")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered).tint(.orange).controlSize(.small)
+                }
+            }
+            HStack {
+                TextField("Neuer Ordner, z. B. Interviews", text: $newFolder).textFieldStyle(.roundedBorder)
+                    .onSubmit { if !newFolder.isEmpty { add(newFolder) } }
+                Button("Anlegen & hineinlegen") { add(newFolder) }
+                    .disabled(newFolder.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .controlSize(.small)
+        }
+    }
+}
+
+/// Eigene Ordner in den Einstellungen verwalten
+struct SpecialFoldersEditor: View {
+    @EnvironmentObject var store: LearnedStore
+    @State private var new = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(store.specialFolders, id: \.self) { f in
+                HStack {
+                    Image(systemName: "folder.fill").foregroundStyle(.orange)
+                    Text(f).font(.system(size: 12))
+                    Spacer()
+                    Button { store.specialFolders.removeAll { $0 == f } } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
+                        .buttonStyle(.plain)
+                }
+            }
+            HStack {
+                TextField("Neuer Ordner", text: $new).textFieldStyle(.roundedBorder)
+                Button("Hinzufügen") { store.addFolder(new); new = "" }.disabled(new.trimmingCharacters(in: .whitespaces).isEmpty)
+            }.controlSize(.small)
+        }
     }
 }
