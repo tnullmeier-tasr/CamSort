@@ -76,6 +76,9 @@ final class Sorter: ObservableObject {
     @Published var problems: [String] = []
     @Published var hints: [String] = []
     @Published var pendingDuplicate: DuplicateRequest?
+    /// Gefundene Final-Cut-Mediatheken (nach dem Sortieren: Hinweis zum Neu-Verknüpfen)
+    @Published var fcpLibraries: [URL] = []
+    @Published var movedVideos = 0
     @Published var pendingCamera: CameraRequest?
     @Published var pendingExtensions: ExtensionRequest?
 
@@ -126,7 +129,7 @@ final class Sorter: ObservableObject {
 
     private func clearResults() {
         counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; speeds = [:]; skipped = 0; ignored = 0
-        problems = []; hints = []; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
+        problems = []; hints = []; movedVideos = 0; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
     }
 
     func start() {
@@ -333,6 +336,7 @@ final class Sorter: ObservableObject {
         }
         var siblings: [URL: Set<String>] = [:]
         for f in found { siblings[f.dir, default: []].insert(f.url.lastPathComponent) }
+        fcpLibraries = found.filter { $0.ext == "fcpbundle" }.map(\.url)
 
         // Unbekannte Dateitypen erfragen
         var unknown: [String: (example: String, count: Int)] = [:]
@@ -442,6 +446,7 @@ final class Sorter: ObservableObject {
                 if let o { target = target.appendingPathComponent(o) }
                 else { hints.append("\(job.url.lastPathComponent): Ausrichtung nicht lesbar – liegt direkt in Videos/\(cam)") }
                 if await move(job.url, to: target) {
+                    movedVideos += 1
                     counts[o ?? "Video", default: 0] += 1
                     cameras[cam, default: 0] += 1
                 }
@@ -538,7 +543,7 @@ final class Sorter: ObservableObject {
                 }
                 let here = i.job.url.deletingLastPathComponent().standardizedFileURL.path
                 var ok = here == target.standardizedFileURL.path
-                if !ok { ok = await move(i.job.url, to: target) }
+                if !ok { ok = await move(i.job.url, to: target); if ok { movedVideos += 1 } }
                 if ok {
                     counts[i.orient ?? "Video", default: 0] += 1
                     cameras[i.cam, default: 0] += 1

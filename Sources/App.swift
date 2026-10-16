@@ -488,6 +488,9 @@ struct DoneView: View {
                 .padding(.bottom, 6)
             }
 
+            if !cancelled && !sorter.fcpLibraries.isEmpty && sorter.movedVideos > 0 {
+                FCPRelinkCard(libraries: sorter.fcpLibraries)
+            }
             if !cancelled && store.enableTagging {
                 HStack(spacing: 8) {
                     Button { tagger.start(folders: sorter.folders) } label: {
@@ -1048,5 +1051,46 @@ struct SpecialFoldersEditor: View {
                 Button("Hinzufügen") { store.addFolder(new); new = "" }.disabled(new.trimmingCharacters(in: .whitespaces).isEmpty)
             }.controlSize(.small)
         }
+    }
+}
+
+
+/// Nach dem Sortieren: Final Cut findet verschobene Clips mit „Dateien neu verknüpfen“ in einem Schritt wieder.
+struct FCPRelinkCard: View {
+    let libraries: [URL]
+    @State private var open = true
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { withAnimation { open.toggle() } } label: {
+                HStack {
+                    Image(systemName: "link.badge.plus")
+                    Text("Final Cut: Clips neu verknüpfen (1 Minute)").font(.system(size: 13, weight: .bold))
+                    Spacer()
+                    Image(systemName: open ? "chevron.up" : "chevron.down")
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if open {
+                Text("In diesem Ordner liegt eine Final-Cut-Mediathek. Weil Clips verschoben wurden, zeigt Final Cut sie evtl. als „fehlend“. So verknüpfst du alle auf einmal:")
+                    .font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("1. Mediathek öffnen (Knopf unten) und links die Mediathek auswählen.")
+                    Text("2. Menü Ablage › Dateien neu verknüpfen › Originalmedien …")
+                    Text("3. „Alle“ wählen › „Ort auswählen …“ › den Dreh- bzw. Kundenordner wählen.")
+                    Text("4. Final Cut findet alle Clips in den Unterordnern selbst › „Dateien neu verknüpfen“.")
+                }
+                .font(.system(size: 11))
+                HStack {
+                    ForEach(libraries.prefix(3), id: \.self) { lib in
+                        Button { NSWorkspace.shared.open(lib) } label: {
+                            Label(lib.deletingPathExtension().lastPathComponent, systemImage: "film.stack")
+                        }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.orange.opacity(0.15)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.orange.opacity(0.6)))
     }
 }
