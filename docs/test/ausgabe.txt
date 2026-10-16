@@ -31,7 +31,7 @@ IOServiceMatchingfailed for: AppleM2ScalerParavirtDriver
 - ℹ️ Vergebene Tags gesamt: Auto×1, Fahrzeug×1, Felge×1, Himmel×1, Porsche×1, Rad×1, Reifen×1
 - ℹ️ Tag-Fehler: keine
 - ✅ Video nach dem Taggen unverändert lesbar
-- ✅ Karte: 2 Aufnahmetage erkannt (["Do., 15.10.2026: 2", "Sa., 05.09.2026: 1"])
+- ✅ Karte: 2 Aufnahmetage erkannt (["Fr., 16.10.2026: 2", "So., 06.09.2026: 1"])
 - ✅ Sony-Vorschaubilder (THMBNL) werden nicht importiert
 - ✅ Import: neuer Tag kopiert, geprüft und einsortiert
 - ✅ Import: alter Tag NICHT kopiert
@@ -52,7 +52,11 @@ IOServiceMatchingfailed for: AppleM2ScalerParavirtDriver
 - ✅ Drehen: nur die Dreh-Angabe geändert (7 Byte von 71905)
 - ✅ Drehen: eingebettete Sony-Metadaten erhalten
 - ✅ Viermal drehen = bitgenau die Originaldatei
-- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-15 21:45:55 +0000 / 2026-10-15 21:45:55 +0000)
+- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-16 06:34:03 +0000 / 2026-10-16 06:34:03 +0000)
+- ✅ Final-Cut-Mediathek im Ordner erkannt
+- ✅ Clips wurden verschoben → Hinweis „Neu verknüpfen“ erscheint
+- ✅ Mediathek-Inhalt bitgenau unverändert (inkl. Verknüpfungen), nur als Ganzes verschoben
+- ✅ CamSort sortiert nichts IN die Mediathek hinein
 
 Fehlgeschlagen: 0
 
