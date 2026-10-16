@@ -309,6 +309,47 @@ struct E2E {
             check(mBefore != nil && mAfter != nil && abs(mBefore!.timeIntervalSince(mAfter!)) < 1, "Drehen: Dateidatum bleibt unverändert (\(mBefore?.description ?? "-") / \(mAfter?.description ?? "-"))")
         }
 
+        // 6f) Final-Cut-Mediathek: wird erkannt, bleibt bitgenau unverändert, Hinweis erscheint
+        do {
+            let fmx = FileManager.default
+            let proj = root.deletingLastPathComponent().appendingPathComponent("FCP-Projekt")
+            let lib = proj.appendingPathComponent("Kunde.fcpbundle")
+            let inner = lib.appendingPathComponent("Event 1")
+            try? fmx.createDirectory(at: inner, withIntermediateDirectories: true)
+            try? Data((0..<5000).map { UInt8($0 % 251) }).write(to: inner.appendingPathComponent("CurrentVersion.fcpevent"))
+            try? "Settings".write(to: lib.appendingPathComponent("Settings.plist"), atomically: true, encoding: .utf8)
+            try? fmx.createSymbolicLink(at: inner.appendingPathComponent("Original Media"), withDestinationURL: proj)
+            func snapshot(_ u: URL) -> [String: String] {
+                var m: [String: String] = [:]
+                let en = fmx.enumerator(at: u, includingPropertiesForKeys: nil, options: [])
+                while let f = en?.nextObject() as? URL {
+                    let rel = String(f.path.dropFirst(u.path.count))
+                    if let dest = try? fmx.destinationOfSymbolicLink(atPath: f.path) { m[rel] = "link:" + dest; en?.skipDescendants() }
+                    else if let d = try? Data(contentsOf: f) { m[rel] = ImportRunner.sha256(f) ?? "\(d.count)" }
+                    else { m[rel] = "dir" }
+                }
+                return m
+            }
+            let before = snapshot(lib)
+            try? fmx.copyItem(at: root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4"), to: proj.appendingPathComponent("C0301.MP4"))
+            store.compactLayout = true
+            sorter.reset(); sorter.addFolders([proj]); sorter.start()
+            while sorter.phase != .done && sorter.phase != .cancelled {
+                if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
+                if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let movedLib = proj.appendingPathComponent("FCP/Kunde.fcpbundle")
+            let libNow = fmx.fileExists(atPath: movedLib.path) ? movedLib : lib
+            check(!sorter.fcpLibraries.isEmpty, "Final-Cut-Mediathek im Ordner erkannt")
+            check(sorter.movedVideos > 0, "Clips wurden verschoben → Hinweis „Neu verknüpfen“ erscheint")
+            check(snapshot(libNow) == before, "Mediathek-Inhalt bitgenau unverändert (inkl. Verknüpfungen), nur als Ganzes verschoben")
+            check(!fmx.fileExists(atPath: libNow.appendingPathComponent("Videos").path), "CamSort sortiert nichts IN die Mediathek hinein")
+            render(DoneView(), "17-fertig-finalcut-hinweis")
+            store.compactLayout = false
+        }
+
         // 7) Weitere Ansichten
         render(SettingsView(), "12-einstellungen", w: 480, h: 620, sheet: true)
         store.droneBySpeed = true
