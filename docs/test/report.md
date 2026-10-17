@@ -51,7 +51,7 @@
 - ✅ Drehen: nur die Dreh-Angabe geändert (7 Byte von 71905)
 - ✅ Drehen: eingebettete Sony-Metadaten erhalten
 - ✅ Viermal drehen = bitgenau die Originaldatei
-- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-17 23:13:32 +0000 / 2026-10-17 23:13:32 +0000)
+- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-17 23:22:06 +0000 / 2026-10-17 23:22:06 +0000)
 - ✅ Final-Cut-Mediathek im Ordner erkannt
 - ✅ Clips wurden verschoben → Hinweis „Neu verknüpfen“ erscheint
 - ✅ Mediathek-Inhalt bitgenau unverändert (inkl. Verknüpfungen), nur als Ganzes verschoben
