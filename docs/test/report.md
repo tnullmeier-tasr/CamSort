@@ -51,7 +51,7 @@
 - ✅ Drehen: nur die Dreh-Angabe geändert (7 Byte von 71905)
 - ✅ Drehen: eingebettete Sony-Metadaten erhalten
 - ✅ Viermal drehen = bitgenau die Originaldatei
-- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-17 16:09:13 +0000 / 2026-10-17 16:09:13 +0000)
+- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-17 23:13:32 +0000 / 2026-10-17 23:13:32 +0000)
 - ✅ Final-Cut-Mediathek im Ordner erkannt
 - ✅ Clips wurden verschoben → Hinweis „Neu verknüpfen“ erscheint
 - ✅ Mediathek-Inhalt bitgenau unverändert (inkl. Verknüpfungen), nur als Ganzes verschoben
@@ -63,5 +63,9 @@
 - ✅ Szene 02: späterer Clip
 - ✅ Kamera + Ausrichtung als Finder-Tag am Clip (["Sony ZV-E1", "Hochkant"])
 - ✅ Keine Duplikate: 4 Clips rein, 4 Clips raus
+- ✅ Preset wird in CamSorts eigenen Ordner übernommen
+- ✅ Preset bleibt nutzbar, auch wenn das Original gelöscht wurde
+- ✅ Mit Preset kommt keine Preset-Meldung mehr („Gyroflow wurde nicht gefunden. Bitte unter Einstel…“)
+- ✅ Falsche Datei wird abgelehnt
 
 Fehlgeschlagen: 0
