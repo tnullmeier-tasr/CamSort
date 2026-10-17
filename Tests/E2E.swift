@@ -253,6 +253,7 @@ struct E2E {
             try? fmx.copyItem(at: zvh, to: d2.appendingPathComponent("C0202.MP4"))           // … + ZV-E1 hochkant
             try? fmx.copyItem(at: root.appendingPathComponent("XML/C0002M01.XML"), to: d2.appendingPathComponent("C0202M01.XML"))
             store.compactLayout = true
+            store.groupByScene = false
             store.droneBySpeed = false
             sorter.reset(); sorter.addFolders([kunde]); sorter.start()
             while sorter.phase != .done && sorter.phase != .cancelled {
@@ -333,6 +334,7 @@ struct E2E {
             let before = snapshot(lib)
             try? fmx.copyItem(at: root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4"), to: proj.appendingPathComponent("C0301.MP4"))
             store.compactLayout = true
+            store.groupByScene = false
             sorter.reset(); sorter.addFolders([proj]); sorter.start()
             while sorter.phase != .done && sorter.phase != .cancelled {
                 if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
@@ -340,7 +342,7 @@ struct E2E {
                 if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
-            let movedLib = proj.appendingPathComponent("FCP/Kunde.fcpbundle")
+            let movedLib = proj.appendingPathComponent("Extras/FCP/Kunde.fcpbundle")
             let libNow = fmx.fileExists(atPath: movedLib.path) ? movedLib : lib
             check(!sorter.fcpLibraries.isEmpty, "Final-Cut-Mediathek im Ordner erkannt")
             check(sorter.movedVideos > 0, "Clips wurden verschoben → Hinweis „Neu verknüpfen“ erscheint")
@@ -348,6 +350,47 @@ struct E2E {
             check(!fmx.fileExists(atPath: libNow.appendingPathComponent("Videos").path), "CamSort sortiert nichts IN die Mediathek hinein")
             render(DoneView(), "17-fertig-finalcut-hinweis")
             store.compactLayout = false
+        }
+
+        // 6g) Szenen: Kamera A Einblendungen, dann Wechsel auf Kamera B, später neue Szene
+        do {
+            let fmx = FileManager.default
+            let dreh = root.deletingLastPathComponent().appendingPathComponent("Szenen-Dreh")
+            try? fmx.createDirectory(at: dreh, withIntermediateDirectories: true)
+            let a1 = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")
+            let zv = root.appendingPathComponent("Videos/Sony ZV-E1/Hochkant/C0002.MP4")
+            let t0 = Date(timeIntervalSince1970: 1_760_000_000)
+            func put(_ src: URL, _ name: String, _ mins: Double, xml: String? = nil) {
+                let u = dreh.appendingPathComponent(name)
+                try? fmx.copyItem(at: src, to: u)
+                if let m = xml { try? "<NonRealTimeMeta><Device manufacturer=\"Sony\" modelName=\"\(m)\"/></NonRealTimeMeta>".write(to: dreh.appendingPathComponent(name.replacingOccurrences(of: ".MP4", with: "M01.XML")), atomically: true, encoding: .utf8) }
+                try? fmx.setAttributes([.modificationDate: t0.addingTimeInterval(mins * 60)], ofItemAtPath: u.path)
+            }
+            put(a1, "C0401.MP4", 0)                     // A: Einblendung 1
+            put(a1, "C0402.MP4", 1)                     // A: Einblendung 2
+            put(zv, "C0501.MP4", 3, xml: "ZV-E1")       // Wechsel auf B
+            put(a1, "C0403.MP4", 40)                    // 40 Min. später: neue Szene
+            store.compactLayout = true; store.groupByScene = true; store.sceneGapMinutes = 5
+            sorter.reset(); sorter.addFolders([dreh]); sorter.start()
+            while sorter.phase != .done && sorter.phase != .cancelled {
+                if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
+                if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let vids = (try? fmx.contentsOfDirectory(atPath: dreh.appendingPathComponent("Videos").path))?.filter { !$0.hasPrefix(".") }.sorted() ?? []
+            report.append("ℹ️ Szenen-Ordner: " + vids.joined(separator: " | "))
+            let s1 = vids.first { $0.hasPrefix("Szene 01") } ?? "", s2 = vids.first { $0.hasPrefix("Szene 02") } ?? ""
+            func inS(_ s: String, _ f: String) -> Bool { fmx.fileExists(atPath: dreh.appendingPathComponent("Videos/\(s)/\(f)").path) }
+            check(vids.count == 2, "Szenen: 2 Szenen erkannt (Pause > 5 Min. trennt)")
+            check(inS(s1, "C0401.MP4") && inS(s1, "C0402.MP4") && inS(s1, "C0501.MP4"), "Szene 01: Einblendungen Kamera A + Wechsel auf Kamera B zusammen")
+            check(s1.contains("Sony Alpha 1 + Sony ZV-E1"), "Szenen-Name nennt beide Kameras in Reihenfolge („\(s1)“)")
+            check(inS(s2, "C0403.MP4"), "Szene 02: späterer Clip")
+            let tg = (try? dreh.appendingPathComponent("Videos/\(s1)/C0501.MP4").resourceValues(forKeys: [.tagNamesKey]).tagNames) ?? []
+            check(tg.contains("Sony ZV-E1") && tg.contains("Hochkant"), "Kamera + Ausrichtung als Finder-Tag am Clip (\(tg))")
+            let all = ((try? fmx.subpathsOfDirectory(atPath: dreh.path)) ?? []).filter { $0.hasSuffix(".MP4") }
+            check(all.count == 4, "Keine Duplikate: 4 Clips rein, 4 Clips raus")
+            store.groupByScene = false; store.compactLayout = false
         }
 
         // 7) Weitere Ansichten

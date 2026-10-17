@@ -55,6 +55,9 @@ final class LearnedStore: ObservableObject {
     /// Eigene Ordner für Videos, die nicht von einer Kamera stammen (Exporte, Bildschirmaufnahmen …)
     @Published var specialFolders: [String] { didSet { d.set(specialFolders, forKey: "specialFolders") } }
     static let folderPrefix = "📁 "
+    /// Videos nach Szenen (zusammenhängende Drehzeit, alle Kameras) statt nach Kamera ordnen
+    @Published var groupByScene: Bool { didSet { d.set(groupByScene, forKey: "groupByScene") } }
+    @Published var sceneGapMinutes: Double { didSet { d.set(sceneGapMinutes, forKey: "sceneGapMinutes") } }
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
     var gyroSuffixList: [String] {
@@ -72,6 +75,8 @@ final class LearnedStore: ObservableObject {
         moveMin = d.object(forKey: "moveMin") as? Double ?? 5
         moveMax = d.object(forKey: "moveMax") as? Double ?? 100
         autoGyro = d.object(forKey: "autoGyro") as? Bool ?? true
+        groupByScene = d.object(forKey: "groupByScene") as? Bool ?? true
+        sceneGapMinutes = d.object(forKey: "sceneGapMinutes") as? Double ?? 5
         specialFolders = d.stringArray(forKey: "specialFolders") ?? ["Finale Videos", "Soundeffekte", "Bildschirmaufnahmen"]
         compactLayout = d.object(forKey: "compactLayout") as? Bool ?? true
         enableTagging = d.object(forKey: "enableTagging") as? Bool ?? false

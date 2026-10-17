@@ -92,7 +92,7 @@ final class Sorter: ObservableObject {
     static let projectExt: Set<String> = ["fcpbundle", "fcpxml", "fcpxmld", "fcpxd"]
     static let sideExt: Set<String> = ["gyroflow", "xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
     static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini", "localized"]
-    static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer", "Stabilisiert", "Original", "Gyroflow-Projekte", "Begleitdateien"]
+    static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer", "Stabilisiert", "Original", "Gyroflow-Projekte", "Begleitdateien", "Extras"]
 
     private var dupForAll: DupChoice?
     @Published var skipAsking = false   // „Lernen überspringen“ für diesen Durchlauf
@@ -381,7 +381,7 @@ final class Sorter: ObservableObject {
                     if await move(job.url, to: dreh.appendingPathComponent("Fotos")) { counts["Fotos", default: 0] += 1 }
                 case .music, .archive, .project:
                     let folder = job.cat.folder ?? "Sonstiges"
-                    if await move(job.url, to: dreh.appendingPathComponent(folder)) { sideCounts[folder, default: 0] += 1 }
+                    if await move(job.url, to: dreh.appendingPathComponent("Extras").appendingPathComponent(folder)) { sideCounts[folder, default: 0] += 1 }
                 default: break
                 }
                 processed += 1
@@ -498,7 +498,7 @@ final class Sorter: ObservableObject {
 
     /// Analysiert alle Videos je Dreh und legt nur die Ordner an, die sich dort unterscheiden.
     private func layoutCompact(_ videos: [Job], siblings: [URL: Set<String>]) async -> Bool {
-        struct Info { let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String? }
+        struct Info { let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String?; let start: Date; let end: Date }
         var infos: [Info] = []
         for job in videos {
             if Task.isCancelled { return false }
@@ -522,12 +522,32 @@ final class Sorter: ObservableObject {
                 case .unreadable: break
                 }
             }
-            infos.append(Info(job: job, cam: cam, lens: lens, speed: speed, orient: o))
+            let (st, en) = await recordingTime(asset, url: job.url)
+            infos.append(Info(job: job, cam: cam, lens: lens, speed: speed, orient: o, start: st, end: en))
         }
         // je Dreh: welche Merkmale unterscheiden sich?
         var byDreh: [URL: [Info]] = [:]
         for i in infos { byDreh[Self.drehRoot(i.job.dir), default: []].append(i) }
+        let tf = DateFormatter(); tf.dateFormat = "HH.mm"
         for (dreh, list) in byDreh {
+            // Szenen: chronologisch, neue Szene nach einer Pause > Schwelle (über alle Kameras hinweg)
+            var sceneOf: [URL: String] = [:]
+            if store.groupByScene {
+                let cams = list.filter { !$0.cam.hasPrefix(LearnedStore.folderPrefix) }.sorted { $0.start < $1.start }
+                var scenes: [[Info]] = []
+                var lastEnd = Date.distantPast
+                for c in cams {
+                    if scenes.isEmpty || c.start.timeIntervalSince(lastEnd) > store.sceneGapMinutes * 60 { scenes.append([c]) }
+                    else { scenes[scenes.count - 1].append(c) }
+                    lastEnd = max(lastEnd, c.end)
+                }
+                for (n, sc) in scenes.enumerated() {
+                    var camNames: [String] = []
+                    for c in sc where !camNames.contains(c.cam) { camNames.append(c.cam) }
+                    let name = String(format: "Szene %02d · %@ · %@", n + 1, tf.string(from: sc[0].start), camNames.joined(separator: " + "))
+                    for c in sc { sceneOf[c.job.url] = Self.clean(name) }
+                }
+            }
             for i in list {
                 if Task.isCancelled { return false }
                 currentFile = i.job.url.lastPathComponent
@@ -537,9 +557,13 @@ final class Sorter: ObservableObject {
                 if let s = i.speed { parts.append(s) }
                 if let o = i.orient { parts.append(o) }
                 var target = dreh.appendingPathComponent("Videos")
-                if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: " · "))) }
+                if let scene = sceneOf[i.job.url] {
+                    target = target.appendingPathComponent(scene)
+                    // Kamera & Ausrichtung als Finder-Tags – im Szenen-Ordner sichtbar, Datei bleibt unverändert
+                    _ = TagRunner.addFinderTags(parts, to: i.job.url)
+                } else if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: " · "))) }
                 if i.cam.hasPrefix(LearnedStore.folderPrefix) {   // eigener Ordner (Exporte, Bildschirmaufnahmen …)
-                    target = dreh.appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
+                    target = dreh.appendingPathComponent("Extras").appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
                 }
                 let here = i.job.url.deletingLastPathComponent().standardizedFileURL.path
                 var ok = here == target.standardizedFileURL.path
@@ -556,6 +580,18 @@ final class Sorter: ObservableObject {
         // leer gewordene alte Unterordner unter „Videos“ aufräumen
         for dreh in byDreh.keys { removeEmptyDirs(dreh.appendingPathComponent("Videos")) }
         return true
+    }
+
+    /// Aufnahmezeit: aus den Video-Metadaten, sonst Dateidatum minus Dauer.
+    private func recordingTime(_ asset: AVURLAsset, url: URL) async -> (Date, Date) {
+        let dur = (try? await asset.load(.duration))?.seconds ?? 0
+        let d = dur.isFinite ? max(dur, 1) : 1
+        if let item = try? await asset.load(.creationDate), let v = try? await item.load(.dateValue) {
+            return (v, v.addingTimeInterval(d))
+        }
+        let rv = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+        let end = rv?.contentModificationDate ?? rv?.creationDate ?? Date()
+        return (end.addingTimeInterval(-d), end)
     }
 
     private func removeEmptyDirs(_ root: URL) {

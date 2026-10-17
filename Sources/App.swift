@@ -402,7 +402,7 @@ struct CountGrid: View {
             ("Fotos", "photo.fill", Color(red: 0.6, green: 0.7, blue: 1), sorter.counts["Fotos"] ?? 0),
         ]
         if let v = sorter.counts["Video"], v > 0 { r.append(("Video", "film", .white, v)) }
-        let icons = ["Begleitdateien": "doc.on.doc", "Stabilisiert": "gyroscope", "Original": "film", "Gyroflow-Projekte": "doc.badge.gearshape",
+        let icons = ["Extras": "tray.full", "Begleitdateien": "doc.on.doc", "Stabilisiert": "gyroscope", "Original": "film", "Gyroflow-Projekte": "doc.badge.gearshape",
                      "XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft", "Musik": "music.note",
                      "ZIP": "doc.zipper", "FCP": "film.stack"]
         let keys = Set(["XML", "LRF", "SRT"]).union(sorter.sideCounts.keys).sorted()
@@ -830,9 +830,20 @@ struct SettingsView: View {
                     WithHelp(title: "Kompakte Ordner", text: "An (empfohlen): Alle Merkmale stehen in EINEM Ordnernamen statt in verschachtelten Ordnern – z. B. Videos/Sony Alpha 1 · FE 24-70 · Quer. So siehst du sofort, was drin ist, und bist mit einem Klick beim Clip. Neue Ordner entstehen nur, wenn es im Dreh wirklich etwas anderes gibt (zweite Kamera, Hochkant-Clips …). XML, LRF und SRT landen gemeinsam in „Begleitdateien“.\n\nEin Dreh ist jeder Ordner mit Clips – bei Kundenordnern also jeder Unterordner. Kartenordner wie DCIM oder PRIVATE zählen zum Dreh darüber.\n\nAus: ausführliche Struktur mit eigenem Ordner pro Ebene (Videos/Kamera/Quer).") {
                         Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
                     }
-                    Text(store.compactLayout
-                         ? "Beispiel: Dreh 1/Videos/Sony Alpha 1 · FE 24-70 · Quer"
-                         : "Beispiel: Dreh 1/Videos/Sony Alpha 1/Quer")
+                    if store.compactLayout {
+                        WithHelp(title: "Videos ordnen nach", text: "Szene: Alles, was zusammenhängend gedreht wurde, landet in einem Ordner – über alle Kameras hinweg, in Aufnahme-Reihenfolge. Ideal, wenn du z. B. Einblendungen mit Kamera A drehst und dann auf Kamera B wechselst. Eine neue Szene beginnt nach einer Drehpause (einstellbar). Kamera und Hochkant/Quer stehen als Finder-Tag an jedem Clip (Spalte „Tags“ im Finder).\n\nKamera: ein Ordner pro Kamera, z. B. Sony Alpha 1 · Quer.\n\nIn beiden Fällen liegt jeder Clip nur einmal vor – nichts wird kopiert.") {
+                            Picker("Videos ordnen nach", selection: $store.groupByScene) {
+                                Text("Szene").tag(true); Text("Kamera").tag(false)
+                            }.pickerStyle(.segmented).frame(width: 220)
+                        }
+                        if store.groupByScene {
+                            Stepper("Neue Szene nach \(Int(store.sceneGapMinutes)) Min. Pause", value: $store.sceneGapMinutes, in: 1...60, step: 1)
+                                .font(.system(size: 12))
+                        }
+                    }
+                    Text(!store.compactLayout ? "Beispiel: Dreh 1/Videos/Sony Alpha 1/Quer"
+                         : store.groupByScene ? "Beispiel: Dreh 1/Videos/Szene 02 · 10.14 · Sony Alpha 1 + Sony ZV-E1"
+                         : "Beispiel: Dreh 1/Videos/Sony Alpha 1 · FE 24-70 · Quer")
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     WithHelp(title: "Unterordner durchsuchen", text: "An: CamSort schaut auch in alle Unterordner des gewählten Ordners und sortiert jede Datei in dem Ordner ein, in dem sie liegt. Ordner, die CamSort selbst angelegt hat (Videos, Fotos, XML …), werden dabei übersprungen.\nAus: Nur Dateien, die direkt im gewählten Ordner liegen, werden sortiert.") {
                         Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
