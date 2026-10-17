@@ -31,7 +31,12 @@ struct GuideView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("So funktioniert CamSort").font(.title2.bold()).padding(.bottom, 12)
+            HStack(alignment: .firstTextBaseline) {
+                Text("So funktioniert CamSort").font(.title2.bold())
+                Spacer()
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–")")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }.padding(.bottom, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(items, id: \.1) { item in

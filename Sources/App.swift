@@ -138,7 +138,7 @@ struct Header: View {
                 .scaleEffect(appear ? 1 : 0.6)
             VStack(alignment: .leading, spacing: 2) {
                 Text("CamSort").font(.system(size: 26, weight: .bold, design: .rounded))
-                Text("Videos & Fotos automatisch sortieren")
+                Text("Videos & Fotos automatisch sortieren · Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–")")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
             }
@@ -283,7 +283,7 @@ struct IdleView: View {
             Spacer(minLength: 0)
 
             Button { sorter.start() } label: {
-                Label(sorter.folders.contains { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }
+                Label(sorter.folders.contains { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }
                       ? "Aktualisieren" : "Sortieren starten", systemImage: "wand.and.stars")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .frame(maxWidth: .infinity).frame(height: 50)
@@ -296,7 +296,7 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
 
-            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
+            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }) {
                 HStack(spacing: 10) {
                     Button { timeline.open(folders: sorter.folders) } label: {
                         Label("Zeitleiste", systemImage: "clock.arrow.2.circlepath")
@@ -312,7 +312,7 @@ struct IdleView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
             }
             if (store.autoGyro || store.showGyroButton),
-               sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Videos").path) }) {
+               sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }) {
                 HStack(spacing: 8) {
                     Button { sorter.startGyro() } label: {
                         Label("Nur Gyroflow-Clips trennen", systemImage: "gyroscope")
@@ -855,6 +855,9 @@ struct SettingsView: View {
                         Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
                     }
 
+                    section("Ordner & Namen")
+                    FolderNamingEditor()
+
                     section("Eigene Ordner")
                     WithHelp(title: "Eigene Ordner", text: "Für Videos, die nicht von einer Kamera stammen – fertige Exporte, Soundeffekte, Bildschirmaufnahmen, Interviews … Kennt CamSort einen Clip nicht, kannst du ihn im Rückfrage-Fenster mit einem Klick in einen dieser Ordner legen. Mit „Merken“ landen gleichartige Dateien künftig automatisch dort. Die Ordner liegen im jeweiligen Dreh neben „Videos“.") {
                         Text("Ordner für Exporte, Soundeffekte & Co.").font(.system(size: 12))
@@ -1104,5 +1107,76 @@ struct FCPRelinkCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.orange.opacity(0.15)))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.orange.opacity(0.6)))
+    }
+}
+
+
+/// Ordnernamen und Benennung anpassen – mit Live-Vorschau
+struct FolderNamingEditor: View {
+    @AppStorage("fnVideos") private var videos = "Videos"
+    @AppStorage("fnPhotos") private var photos = "Fotos"
+    @AppStorage("fnSide") private var side = "Begleitdateien"
+    @AppStorage("fnExtras") private var extras = "Extras"
+    @AppStorage("fnSeparator") private var separator = " · "
+    @AppStorage("fnShowCamera") private var showCamera = true
+    @AppStorage("fnShowOrientation") private var showOrientation = true
+    @AppStorage("fnSceneWord") private var sceneWord = "Szene"
+    @AppStorage("fnSceneTime") private var sceneTime = true
+    @AppStorage("fnSceneCams") private var sceneCams = true
+    @EnvironmentObject var store: LearnedStore
+
+    private var sampleCamFolder: String {
+        var p: [String] = []
+        if showCamera { p.append("Sony Alpha 1") }
+        if store.sortByLens { p.append("FE 24-70") }
+        if showOrientation { p.append("Quer") }
+        return p.isEmpty ? "Sony Alpha 1" : p.joined(separator: separator)
+    }
+    private var sampleScene: String {
+        var p = ["\(sceneWord.isEmpty ? "Szene" : sceneWord) 01"]
+        if sceneTime { p.append("10.14") }
+        if sceneCams { p.append("Sony Alpha 1 + Sony ZV-E1") }
+        return p.joined(separator: separator)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            WithHelp(title: "Ordnernamen", text: "So heißen die Ordner, die CamSort in jedem Dreh anlegt. Bereits sortierte Ordner mit den alten Standardnamen erkennt CamSort weiterhin.") {
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow { Text("Videos").font(.system(size: 11)); TextField("Videos", text: $videos) }
+                    GridRow { Text("Fotos").font(.system(size: 11)); TextField("Fotos", text: $photos) }
+                    GridRow { Text("Begleitdateien").font(.system(size: 11)); TextField("Begleitdateien", text: $side) }
+                    GridRow { Text("Extras").font(.system(size: 11)); TextField("Extras", text: $extras) }
+                }
+                .textFieldStyle(.roundedBorder).controlSize(.small)
+            }
+            WithHelp(title: "Ordnername bei „Kamera“", text: "Was im Namen der Video-Ordner steht, wenn nach Kamera geordnet wird. Das Objektiv kommt dazu, wenn „Nach Objektiv sortieren“ an ist.") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Kamera im Namen", isOn: $showCamera)
+                    Toggle("Hochkant/Quer im Namen", isOn: $showOrientation)
+                }.font(.system(size: 12))
+            }
+            WithHelp(title: "Ordnername bei „Szene“", text: "Wie Szenen-Ordner heißen. Statt „Szene“ geht z. B. auch „Take“ oder „Einstellung“.") {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack { Text("Wort").font(.system(size: 11)); TextField("Szene", text: $sceneWord).textFieldStyle(.roundedBorder).controlSize(.small).frame(width: 120) }
+                    Toggle("Uhrzeit im Namen", isOn: $sceneTime)
+                    Toggle("Kameras im Namen", isOn: $sceneCams)
+                }.font(.system(size: 12))
+            }
+            WithHelp(title: "Trennzeichen", text: "Zeichen zwischen den Teilen eines Ordnernamens.") {
+                Picker("Trennzeichen", selection: $separator) {
+                    Text("·").tag(" · "); Text("-").tag(" - "); Text("_").tag("_"); Text("|").tag(" | ")
+                }.pickerStyle(.segmented).frame(width: 200)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Vorschau").font(.system(size: 11, weight: .semibold))
+                Text("Dreh/\(videos)/\(store.groupByScene ? sampleScene : sampleCamFolder)/C0001.MP4")
+                Text("Dreh/\(photos)/ · Dreh/\(side)/ · Dreh/\(extras)/")
+            }
+            .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+            .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        }
+        .toggleStyle(.switch).controlSize(.small)
     }
 }

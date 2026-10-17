@@ -10,6 +10,10 @@ APP=build/CamSort.app
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 lipo -create build/CamSort-arm64 build/CamSort-x86_64 -output "$APP/Contents/MacOS/CamSort"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+if [ -n "${VERSION:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION##*.}" "$APP/Contents/Info.plist"
+fi
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 codesign --force --deep -s - "$APP"
 (cd build && ditto -c -k --keepParent CamSort.app CamSort.zip)

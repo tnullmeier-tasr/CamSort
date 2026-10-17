@@ -69,7 +69,7 @@ final class TagRunner: ObservableObject {
             guard let en = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey],
                                                           options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
             while let u = en.nextObject() as? URL {
-                if Sorter.videoExt.contains(u.pathExtension.lowercased()), u.pathComponents.contains("Videos") { out.append(u) }
+                if Sorter.videoExt.contains(u.pathExtension.lowercased()), u.pathComponents.contains(where: FolderNames.isVideos) { out.append(u) }
             }
         }
         return out.sorted { $0.path < $1.path }

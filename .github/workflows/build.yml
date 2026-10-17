@@ -69,6 +69,8 @@ jobs:
           git pull -q --rebase || true
           git add docs/test && git commit -qm "Testergebnis [skip ci]" && git push -q || true
       - name: Build
+        env:
+          VERSION: 1.0.${{ github.run_number }}
         run: ./build.sh
       - name: Echtes Bildschirmfoto
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[test]')

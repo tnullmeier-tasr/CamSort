@@ -92,7 +92,7 @@ final class Sorter: ObservableObject {
     static let projectExt: Set<String> = ["fcpbundle", "fcpxml", "fcpxmld", "fcpxd"]
     static let sideExt: Set<String> = ["gyroflow", "xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
     static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini", "localized"]
-    static let fixedOutput: Set<String> = ["Videos", "Fotos", "Musik", "ZIP", "FCP", "Hochkant", "Quer", "Stabilisiert", "Original", "Gyroflow-Projekte", "Begleitdateien", "Extras"]
+    static var fixedOutput: Set<String> { FolderNames.outputNames.union(["Musik", "ZIP", "FCP", "Hochkant", "Quer", "Stabilisiert", "Original", "Gyroflow-Projekte"]) }
 
     private var dupForAll: DupChoice?
     @Published var skipAsking = false   // „Lernen überspringen“ für diesen Durchlauf
@@ -133,6 +133,7 @@ final class Sorter: ObservableObject {
     }
 
     func start() {
+        FolderNames.load()
         guard !folders.isEmpty else { return }
         clearResults(); processed = 0
         phase = .scanning
@@ -150,7 +151,7 @@ final class Sorter: ObservableObject {
     @Published var stepLabel = ""
     @Published var gyroMoved = 0
     private var alreadySorted: Bool {
-        folders.contains { fm.fileExists(atPath: $0.appendingPathComponent("Videos").path) }
+        folders.contains { fm.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }
     }
 
     func startGyro() {
@@ -297,8 +298,8 @@ final class Sorter: ObservableObject {
                     if Self.projectExt.contains(ext) { out.append((u.deletingLastPathComponent(), u, ext)) }
                     return false
                 }
-                if store.compactLayout && u.lastPathComponent == "Videos" { return true }
-                if store.compactLayout && u.pathComponents.contains("Videos") {
+                if store.compactLayout && FolderNames.isVideos(u.lastPathComponent) { return true }
+                if store.compactLayout && u.pathComponents.contains(where: FolderNames.isVideos) {
                     return !["Stabilisiert", "Original", "Gyroflow-Projekte"].contains(u.lastPathComponent)
                 }
                 return !outNames.contains(u.lastPathComponent)
@@ -376,12 +377,12 @@ final class Sorter: ObservableObject {
                 let dreh = Self.drehRoot(job.dir)
                 switch job.cat {
                 case .side:
-                    if await move(job.url, to: dreh.appendingPathComponent("Begleitdateien")) { sideCounts[job.ext.uppercased(), default: 0] += 1 }
+                    if await move(job.url, to: dreh.appendingPathComponent(FolderNames.side)) { sideCounts[job.ext.uppercased(), default: 0] += 1 }
                 case .photo:
-                    if await move(job.url, to: dreh.appendingPathComponent("Fotos")) { counts["Fotos", default: 0] += 1 }
+                    if await move(job.url, to: dreh.appendingPathComponent(FolderNames.photos)) { counts["Fotos", default: 0] += 1 }
                 case .music, .archive, .project:
                     let folder = job.cat.folder ?? "Sonstiges"
-                    if await move(job.url, to: dreh.appendingPathComponent("Extras").appendingPathComponent(folder)) { sideCounts[folder, default: 0] += 1 }
+                    if await move(job.url, to: dreh.appendingPathComponent(FolderNames.extras).appendingPathComponent(folder)) { sideCounts[folder, default: 0] += 1 }
                 default: break
                 }
                 processed += 1
@@ -473,7 +474,7 @@ final class Sorter: ObservableObject {
     static func drehRoot(_ dir: URL) -> URL {
         let c = dir.pathComponents
         var root = dir
-        if let i = c.firstIndex(of: "Videos") { root = URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i]))) }
+        if let i = c.firstIndex(where: FolderNames.isVideos) { root = URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i]))) }
         else if let i = c.firstIndex(where: { cardMarkers.contains($0.uppercased()) }) {
             root = URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i])))
         } else { return dir }
@@ -488,7 +489,7 @@ final class Sorter: ObservableObject {
 
     private func sidecar(_ stem: String, exts: [String], near dir: URL) -> URL? {
         let dreh = Self.drehRoot(dir)
-        let dirs = [dir, dreh.appendingPathComponent("Begleitdateien"), dreh.appendingPathComponent("SRT"), dreh.appendingPathComponent("XML")]
+        let dirs = [dir, dreh.appendingPathComponent(FolderNames.side), dreh.appendingPathComponent("Begleitdateien"), dreh.appendingPathComponent("SRT"), dreh.appendingPathComponent("XML")]
         for d in dirs { for e in exts {
             let u = d.appendingPathComponent(stem + e)
             if fm.fileExists(atPath: u.path) { return u }
@@ -544,7 +545,10 @@ final class Sorter: ObservableObject {
                 for (n, sc) in scenes.enumerated() {
                     var camNames: [String] = []
                     for c in sc where !camNames.contains(c.cam) { camNames.append(c.cam) }
-                    let name = String(format: "Szene %02d · %@ · %@", n + 1, tf.string(from: sc[0].start), camNames.joined(separator: " + "))
+                    var nameParts = [String(format: "%@ %02d", FolderNames.sceneWord, n + 1)]
+                    if FolderNames.sceneShowTime { nameParts.append(tf.string(from: sc[0].start)) }
+                    if FolderNames.sceneShowCams { nameParts.append(camNames.joined(separator: " + ")) }
+                    let name = nameParts.joined(separator: FolderNames.separator)
                     for c in sc { sceneOf[c.job.url] = Self.clean(name) }
                 }
             }
@@ -552,18 +556,24 @@ final class Sorter: ObservableObject {
                 if Task.isCancelled { return false }
                 currentFile = i.job.url.lastPathComponent
                 // Immer eine Ebene, Name enthält alle Merkmale – so erkennt man den Ordner sofort.
-                var parts: [String] = [i.cam]
+                var tags: [String] = [i.cam]
+                if let l = i.lens { tags.append(l) }
+                if let s = i.speed { tags.append(s) }
+                if let o = i.orient { tags.append(o) }
+                var parts: [String] = []
+                if FolderNames.showCamera { parts.append(i.cam) }
                 if let l = i.lens { parts.append(l) }
                 if let s = i.speed { parts.append(s) }
-                if let o = i.orient { parts.append(o) }
-                var target = dreh.appendingPathComponent("Videos")
+                if FolderNames.showOrientation, let o = i.orient { parts.append(o) }
+                if parts.isEmpty { parts = [i.cam] }
+                var target = dreh.appendingPathComponent(FolderNames.videos)
                 if let scene = sceneOf[i.job.url] {
                     target = target.appendingPathComponent(scene)
                     // Kamera & Ausrichtung als Finder-Tags – im Szenen-Ordner sichtbar, Datei bleibt unverändert
-                    _ = TagRunner.addFinderTags(parts, to: i.job.url)
-                } else if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: " · "))) }
+                    _ = TagRunner.addFinderTags(tags, to: i.job.url)
+                } else if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: FolderNames.separator))) }
                 if i.cam.hasPrefix(LearnedStore.folderPrefix) {   // eigener Ordner (Exporte, Bildschirmaufnahmen …)
-                    target = dreh.appendingPathComponent("Extras").appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
+                    target = dreh.appendingPathComponent(FolderNames.extras).appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
                 }
                 let here = i.job.url.deletingLastPathComponent().standardizedFileURL.path
                 var ok = here == target.standardizedFileURL.path
@@ -578,7 +588,7 @@ final class Sorter: ObservableObject {
             }
         }
         // leer gewordene alte Unterordner unter „Videos“ aufräumen
-        for dreh in byDreh.keys { removeEmptyDirs(dreh.appendingPathComponent("Videos")) }
+        for dreh in byDreh.keys { removeEmptyDirs(dreh.appendingPathComponent(FolderNames.videos)) }
         return true
     }
 

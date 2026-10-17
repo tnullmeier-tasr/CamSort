@@ -73,7 +73,7 @@ final class GyroRunner: ObservableObject {
                 let stem = u.deletingPathExtension().lastPathComponent.lowercased()
                 if suffixes.contains(where: { stem.contains($0) }) { continue }       // schon stabilisiert
                 let comps = u.pathComponents
-                guard comps.contains("Videos") else { continue }
+                guard comps.contains(where: FolderNames.isVideos) else { continue }
                 let group = comps.contains("Hochkant") || comps.last(where: { $0.contains("Hochkant") }) != nil ? "Hochkant"
                           : comps.contains("Quer") || comps.last(where: { $0.contains("Quer") }) != nil ? "Quer"
                           : Self.orientationSync(u)
