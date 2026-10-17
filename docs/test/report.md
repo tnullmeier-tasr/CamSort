@@ -30,7 +30,7 @@
 - ℹ️ Vergebene Tags gesamt: Auto×1, Fahrzeug×1, Felge×1, Himmel×1, Porsche×1, Rad×1, Reifen×1
 - ℹ️ Tag-Fehler: keine
 - ✅ Video nach dem Taggen unverändert lesbar
-- ✅ Karte: 2 Aufnahmetage erkannt (["Fr., 16.10.2026: 2", "So., 06.09.2026: 1"])
+- ✅ Karte: 2 Aufnahmetage erkannt (["Sa., 17.10.2026: 2", "Mo., 07.09.2026: 1"])
 - ✅ Sony-Vorschaubilder (THMBNL) werden nicht importiert
 - ✅ Import: neuer Tag kopiert, geprüft und einsortiert
 - ✅ Import: alter Tag NICHT kopiert
@@ -51,10 +51,17 @@
 - ✅ Drehen: nur die Dreh-Angabe geändert (7 Byte von 71905)
 - ✅ Drehen: eingebettete Sony-Metadaten erhalten
 - ✅ Viermal drehen = bitgenau die Originaldatei
-- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-16 06:34:03 +0000 / 2026-10-16 06:34:03 +0000)
+- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-17 16:09:13 +0000 / 2026-10-17 16:09:13 +0000)
 - ✅ Final-Cut-Mediathek im Ordner erkannt
 - ✅ Clips wurden verschoben → Hinweis „Neu verknüpfen“ erscheint
 - ✅ Mediathek-Inhalt bitgenau unverändert (inkl. Verknüpfungen), nur als Ganzes verschoben
 - ✅ CamSort sortiert nichts IN die Mediathek hinein
+- ℹ️ Szenen-Ordner: Szene 01 · 08.53 · Sony Alpha 1 + Sony ZV-E1 | Szene 02 · 09.33 · Sony Alpha 1
+- ✅ Szenen: 2 Szenen erkannt (Pause > 5 Min. trennt)
+- ✅ Szene 01: Einblendungen Kamera A + Wechsel auf Kamera B zusammen
+- ✅ Szenen-Name nennt beide Kameras in Reihenfolge („Szene 01 · 08.53 · Sony Alpha 1 + Sony ZV-E1“)
+- ✅ Szene 02: späterer Clip
+- ✅ Kamera + Ausrichtung als Finder-Tag am Clip (["Sony ZV-E1", "Hochkant"])
+- ✅ Keine Duplikate: 4 Clips rein, 4 Clips raus
 
 Fehlgeschlagen: 0
