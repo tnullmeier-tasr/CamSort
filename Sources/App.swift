@@ -916,6 +916,7 @@ struct SettingsView: View {
 
 struct GyroPresetBox: View {
     @EnvironmentObject var store: LearnedStore
+    @State private var migrated = false
     @State private var showGuide = false
     private var ok: Bool { !store.gyroPresetPath.isEmpty && FileManager.default.fileExists(atPath: store.gyroPresetPath) }
 
@@ -924,7 +925,7 @@ struct GyroPresetBox: View {
             HStack {
                 Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .foregroundStyle(ok ? .green : .orange)
-                Text(ok ? "Preset: " + (store.gyroPresetPath as NSString).lastPathComponent : "Noch kein Gyroflow-Preset hinterlegt")
+                Text(ok ? "Preset gespeichert: " + (store.gyroPresetPath as NSString).lastPathComponent : "Noch kein Gyroflow-Preset hinterlegt")
                     .font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Spacer()
                 HelpButton(title: "Gyroflow-Preset", text: "Das Preset ist eine kleine Datei (Endung .gyroflow), in der deine gewohnten Gyroflow-Einstellungen stehen – Objektivprofil, Glättung, Export-Format. CamSort gibt sie beim Stabilisieren an Gyroflow weiter, damit alles genauso gerendert wird wie bei dir von Hand. An deinen Einstellungen in Gyroflow ändert sich nichts.")
@@ -944,13 +945,14 @@ struct GyroPresetBox: View {
                     step(4, "Im folgenden Fenster alle Haken setzen – besonders bei den Export-/Ausgabe-Einstellungen (Codec, Bitrate). Dann fragt Gyroflow später nicht mehr pro Datei nach.")
                     step(5, "Datei z. B. als „Sony.gyroflow“ an einem festen Ort speichern, etwa im Ordner Dokumente.")
                     step(6, "Hier in CamSort auf „Preset-Datei wählen …“ klicken und genau diese Datei auswählen.")
-                    Text("Wichtig: Datei danach nicht verschieben oder löschen – CamSort greift bei jedem Stabilisieren darauf zu. Ändern sich deine Einstellungen, einfach neu speichern (gleicher Name überschreibt).")
+                    Text("CamSort speichert sich eine eigene Kopie des Presets – du kannst die Datei danach verschieben oder löschen. Ändern sich deine Gyroflow-Einstellungen, das neue Preset einfach hier erneut wählen.")
                         .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
             }
         }
+        .onAppear { if !migrated { store.migratePresetIfNeeded(); migrated = true } }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).strokeBorder(ok ? Color.green.opacity(0.4) : Color.orange.opacity(0.6)))
     }
@@ -967,10 +969,9 @@ struct GyroPresetBox: View {
         p.canChooseFiles = true; p.canChooseDirectories = false; p.allowsMultipleSelection = false
         p.message = "Gyroflow-Preset (.gyroflow) auswählen"
         if p.runModal() == .OK, let u = p.url {
-            if u.pathExtension.lowercased() == "gyroflow" { store.gyroPresetPath = u.path }
-            else {
-                let a = NSAlert(); a.messageText = "Das ist keine Gyroflow-Preset-Datei"
-                a.informativeText = "Bitte eine Datei mit der Endung .gyroflow wählen."; a.runModal()
+            if let err = store.importPreset(from: u) {
+                let a = NSAlert(); a.messageText = "Preset konnte nicht übernommen werden"
+                a.informativeText = err; a.runModal()
             }
         }
     }

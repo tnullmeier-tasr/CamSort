@@ -393,6 +393,22 @@ struct E2E {
             store.groupByScene = false; store.compactLayout = false
         }
 
+        // 6h) Gyroflow-Preset: wird in CamSorts eigenen Ordner übernommen, Original darf danach weg
+        do {
+            let fmx = FileManager.default
+            let src = root.deletingLastPathComponent().appendingPathComponent("Sony.gyroflow")
+            try? #"{"version":2,"stabilization":{"fov":1.0}}"#.write(to: src, atomically: true, encoding: .utf8)
+            let err = store.importPreset(from: src)
+            check(err == nil && store.gyroPresetPath.hasPrefix(LearnedStore.presetDir.path), "Preset wird in CamSorts eigenen Ordner übernommen")
+            try? fmx.removeItem(at: src)
+            check(fmx.isReadableFile(atPath: store.gyroPresetPath), "Preset bleibt nutzbar, auch wenn das Original gelöscht wurde")
+            gyro.start(folders: [root])
+            if case .failed(let m) = gyro.state { check(!m.contains("kein Gyroflow-Preset") && !m.contains("nicht lesbar"), "Mit Preset kommt keine Preset-Meldung mehr („\(m.prefix(50))…“)") }
+            else { check(true, "Mit Preset kommt keine Preset-Meldung mehr") }
+            gyro.close()
+            check(store.importPreset(from: URL(fileURLWithPath: "/tmp/x.txt")) != nil, "Falsche Datei wird abgelehnt")
+        }
+
         // 7) Weitere Ansichten
         render(SettingsView(), "12-einstellungen", w: 480, h: 620, sheet: true)
         store.droneBySpeed = true

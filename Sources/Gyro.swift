@@ -142,9 +142,14 @@ final class GyroRunner: ObservableObject {
             state = .failed("Gyroflow wurde nicht gefunden. Bitte unter Einstellungen › Gyroflow die Gyroflow-App auswählen.")
             return
         }
+        store.migratePresetIfNeeded()
         let preset = store.gyroPresetPath
-        guard !preset.isEmpty, FileManager.default.fileExists(atPath: preset) else {
+        guard !preset.isEmpty else {
             state = .failed("Es ist noch kein Gyroflow-Preset hinterlegt. Bitte unter Einstellungen › Gyroflow das Preset auswählen (dort steht Schritt für Schritt, wie).")
+            return
+        }
+        guard FileManager.default.isReadableFile(atPath: preset) else {
+            state = .failed("Das Preset „\((preset as NSString).lastPathComponent)“ ist nicht lesbar (\(preset)). Bitte unter Einstellungen › Gyroflow einmal neu wählen – CamSort speichert sich dann eine eigene Kopie.")
             return
         }
         let clips = collectSonyClips(in: folders)

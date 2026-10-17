@@ -47,6 +47,7 @@ final class LearnedStore: ObservableObject {
     @Published var moveMin: Double { didSet { d.set(moveMin, forKey: "moveMin") } }
     @Published var moveMax: Double { didSet { d.set(moveMax, forKey: "moveMax") } }
     @Published var gyroPresetPath: String { didSet { d.set(gyroPresetPath, forKey: "gyroPresetPath") } }
+    @Published var gyroPresetSource: String { didSet { d.set(gyroPresetSource, forKey: "gyroPresetSource") } }
     @Published var gyroAppPath: String { didSet { d.set(gyroAppPath, forKey: "gyroAppPath") } }
     @Published var showGyroButton: Bool { didSet { d.set(showGyroButton, forKey: "showGyroButton") } }
     @Published var enableTagging: Bool { didSet { d.set(enableTagging, forKey: "enableTagging") } }
@@ -83,6 +84,7 @@ final class LearnedStore: ObservableObject {
         showGyroButton = d.object(forKey: "showGyroButton") as? Bool ?? true
         gyroPresetPath = d.string(forKey: "gyroPresetPath") ?? ""
         gyroAppPath = d.string(forKey: "gyroAppPath") ?? ""
+        gyroPresetSource = d.string(forKey: "gyroPresetSource") ?? ""
         gyroSuffixes = d.string(forKey: "gyroSuffixes") ?? "_stabilized, _stabilisiert, _gyroflow, _gyro"
         if let data = d.data(forKey: "cameraRules2"), let r = try? JSONDecoder().decode([CameraRule].self, from: data) { rules = r }
         if let data = d.data(forKey: "extensions2"), let e = try? JSONDecoder().decode([String: FileCategory].self, from: data) { extensions = e }
@@ -107,6 +109,34 @@ final class LearnedStore: ObservableObject {
         rules.append(CameraRule(signature: signature, label: label, camera: camera)); save()
     }
     func remove(_ r: CameraRule) { rules.removeAll { $0 == r }; save() }
+
+    /// Preset in CamSorts eigenen Ordner kopieren (Application Support) – dort braucht es keine
+    /// Ordner-Freigabe von macOS, auch nicht nach einem App-Update. Gibt eine Fehlermeldung zurück oder nil.
+    @discardableResult
+    func importPreset(from url: URL) -> String? {
+        guard url.pathExtension.lowercased() == "gyroflow" else { return "Bitte eine Datei mit der Endung .gyroflow wählen." }
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            return "Die Datei ließ sich nicht lesen. Bitte erneut wählen und die macOS-Nachfrage nach dem Zugriff mit „Erlauben“ bestätigen."
+        }
+        let dir = Self.presetDir
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dst = dir.appendingPathComponent(url.lastPathComponent)
+        do {
+            try data.write(to: dst, options: .atomic)
+            gyroPresetPath = dst.path
+            gyroPresetSource = url.path
+            return nil
+        } catch { return "Speichern fehlgeschlagen: \(error.localizedDescription)" }
+    }
+    static var presetDir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CamSort/Gyroflow-Presets")
+    }
+    /// Altes Preset (aus früheren Versionen direkt verlinkt) einmalig übernehmen
+    func migratePresetIfNeeded() {
+        guard !gyroPresetPath.isEmpty, !gyroPresetPath.hasPrefix(Self.presetDir.path) else { return }
+        _ = importPreset(from: URL(fileURLWithPath: gyroPresetPath))
+    }
 
     func learnExtension(_ ext: String, as cat: FileCategory) { extensions[ext] = cat; save() }
     func removeExtension(_ ext: String) { extensions[ext] = nil; save() }
