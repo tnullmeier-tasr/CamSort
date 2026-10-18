@@ -57,7 +57,30 @@ final class LearnedStore: ObservableObject {
     @Published var specialFolders: [String] { didSet { d.set(specialFolders, forKey: "specialFolders") } }
     static let folderPrefix = "📁 "
     /// Videos nach Szenen (zusammenhängende Drehzeit, alle Kameras) statt nach Kamera ordnen
-    @Published var groupByScene: Bool { didSet { d.set(groupByScene, forKey: "groupByScene") } }
+    @Published var groupByScene: Bool { didSet {
+        d.set(groupByScene, forKey: "groupByScene")
+        if !syncing { levels = groupByScene ? ["scene"] : ["camera", "orientation"] }
+    } }
+    /// Ordner-Baukasten: aktive Kriterien in Reihenfolge – scene, camera, lens, length, orientation, speed
+    @Published var levels: [String] { didSet {
+        d.set(levels, forKey: "levels")
+        syncing = true
+        groupByScene = levels.contains("scene"); sortByLens = levels.contains("lens"); droneBySpeed = levels.contains("speed")
+        syncing = false
+    } }
+    @Published var nestLevels: Bool { didSet { d.set(nestLevels, forKey: "nestLevels") } }
+    @Published var lengthThreshold: Double { didSet { d.set(lengthThreshold, forKey: "lengthThreshold") } }
+    @Published var lengthShort: String { didSet { d.set(lengthShort, forKey: "lengthShort") } }
+    @Published var lengthLong: String { didSet { d.set(lengthLong, forKey: "lengthLong") } }
+    private var syncing = false
+    static let allLevels: [(id: String, name: String, icon: String)] = [
+        ("scene", "Szene (zusammenhängende Drehzeit)", "film.stack"),
+        ("camera", "Kamera", "camera.fill"),
+        ("lens", "Objektiv", "camera.aperture"),
+        ("length", "Länge (Einblendung / Hauptspur)", "timer"),
+        ("orientation", "Hochkant / Quer", "rectangle.portrait.on.rectangle.portrait"),
+        ("speed", "Drohne: Stand / Fahrt", "airplane"),
+    ]
     @Published var sceneGapMinutes: Double { didSet { d.set(sceneGapMinutes, forKey: "sceneGapMinutes") } }
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
@@ -78,6 +101,19 @@ final class LearnedStore: ObservableObject {
         autoGyro = d.object(forKey: "autoGyro") as? Bool ?? true
         groupByScene = d.object(forKey: "groupByScene") as? Bool ?? true
         sceneGapMinutes = d.object(forKey: "sceneGapMinutes") as? Double ?? 5
+        nestLevels = d.object(forKey: "nestLevels") as? Bool ?? false
+        lengthThreshold = d.object(forKey: "lengthThreshold") as? Double ?? 30
+        lengthShort = d.string(forKey: "lengthShort") ?? "Einblendungen"
+        lengthLong = d.string(forKey: "lengthLong") ?? "Hauptspur"
+        if let l = d.stringArray(forKey: "levels") { levels = l }
+        else {
+            let scene = d.object(forKey: "groupByScene") as? Bool ?? true
+            var l: [String] = scene ? ["scene"] : ["camera"]
+            if d.bool(forKey: "sortByLens") && !scene { l.append("lens") }
+            if !scene { l.append("orientation") }
+            if d.bool(forKey: "droneBySpeed") { l.append("speed") }
+            levels = l
+        }
         specialFolders = d.stringArray(forKey: "specialFolders") ?? ["Finale Videos", "Soundeffekte", "Bildschirmaufnahmen"]
         compactLayout = d.object(forKey: "compactLayout") as? Bool ?? true
         enableTagging = d.object(forKey: "enableTagging") as? Bool ?? false

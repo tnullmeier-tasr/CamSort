@@ -500,6 +500,7 @@ final class Sorter: ObservableObject {
     /// Analysiert alle Videos je Dreh und legt nur die Ordner an, die sich dort unterscheiden.
     private func layoutCompact(_ videos: [Job], siblings: [URL: Set<String>]) async -> Bool {
         struct Info { let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String?; let start: Date; let end: Date }
+        let lv = store.levels
         var infos: [Info] = []
         for job in videos {
             if Task.isCancelled { return false }
@@ -511,9 +512,9 @@ final class Sorter: ObservableObject {
             if let x = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: job.dir) { sib.insert(x.lastPathComponent) }
             guard let cam = await camera(for: job.url, asset: asset, siblings: sib) else { return false }
             var lens: String? = nil
-            if store.sortByLens { lens = await lensName(for: job.url, asset: asset, siblings: sib) ?? "Objektiv unbekannt" }
+            if lv.contains("lens") { lens = await lensName(for: job.url, asset: asset, siblings: sib) ?? "Objektiv unbekannt" }
             var speed: String? = nil
-            if store.droneBySpeed, let srt = sidecar(stem, exts: [".SRT", ".srt"], near: job.dir) {
+            if lv.contains("speed"), let srt = sidecar(stem, exts: [".SRT", ".srt"], near: job.dir) {
                 switch SRTSpeed.analyze(srt) {
                 case .speed(let kmh):
                     speed = kmh >= store.standMin && kmh <= store.standMax ? "Stand"
@@ -533,7 +534,7 @@ final class Sorter: ObservableObject {
         for (dreh, list) in byDreh {
             // Szenen: chronologisch, neue Szene nach einer Pause > Schwelle (über alle Kameras hinweg)
             var sceneOf: [URL: String] = [:]
-            if store.groupByScene {
+            if lv.contains("scene") {
                 let cams = list.filter { !$0.cam.hasPrefix(LearnedStore.folderPrefix) }.sorted { $0.start < $1.start }
                 var scenes: [[Info]] = []
                 var lastEnd = Date.distantPast
@@ -560,18 +561,28 @@ final class Sorter: ObservableObject {
                 if let l = i.lens { tags.append(l) }
                 if let s = i.speed { tags.append(s) }
                 if let o = i.orient { tags.append(o) }
+                // Ordner-Baukasten: Werte der aktiven Kriterien in der gewählten Reihenfolge
+                let dur = i.end.timeIntervalSince(i.start)
                 var parts: [String] = []
-                if FolderNames.showCamera { parts.append(i.cam) }
-                if let l = i.lens { parts.append(l) }
-                if let s = i.speed { parts.append(s) }
-                if FolderNames.showOrientation, let o = i.orient { parts.append(o) }
-                if parts.isEmpty { parts = [i.cam] }
+                for l in lv {
+                    switch l {
+                    case "scene": if let s = sceneOf[i.job.url] { parts.append(s) }
+                    case "camera": parts.append(i.cam)
+                    case "lens": if let x = i.lens { parts.append(x) }
+                    case "length": parts.append(dur < store.lengthThreshold ? store.lengthShort : store.lengthLong)
+                    case "orientation": if let o = i.orient { parts.append(o) }
+                    case "speed": if let s = i.speed { parts.append(s) }
+                    default: break
+                    }
+                }
                 var target = dreh.appendingPathComponent(FolderNames.videos)
-                if let scene = sceneOf[i.job.url] {
-                    target = target.appendingPathComponent(scene)
-                    // Kamera & Ausrichtung als Finder-Tags – im Szenen-Ordner sichtbar, Datei bleibt unverändert
-                    _ = TagRunner.addFinderTags(tags, to: i.job.url)
-                } else if !parts.isEmpty { target = target.appendingPathComponent(Self.clean(parts.joined(separator: FolderNames.separator))) }
+                if store.nestLevels {
+                    for p in parts { target = target.appendingPathComponent(Self.clean(p)) }
+                } else if !parts.isEmpty {
+                    target = target.appendingPathComponent(Self.clean(parts.joined(separator: FolderNames.separator)))
+                }
+                // Was nicht im Ordnernamen steht, als Finder-Tag – Datei bleibt unverändert
+                _ = TagRunner.addFinderTags(tags, to: i.job.url)
                 if i.cam.hasPrefix(LearnedStore.folderPrefix) {   // eigener Ordner (Exporte, Bildschirmaufnahmen …)
                     target = dreh.appendingPathComponent(FolderNames.extras).appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
                 }

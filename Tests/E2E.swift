@@ -409,6 +409,50 @@ struct E2E {
             check(store.importPreset(from: URL(fileURLWithPath: "/tmp/x.txt")) != nil, "Falsche Datei wird abgelehnt")
         }
 
+        // 6i) Ordner-Baukasten: Szene › Länge als Unterordner (Einblendungen / Hauptspur)
+        do {
+            let fmx = FileManager.default
+            let dreh = root.deletingLastPathComponent().appendingPathComponent("Baukasten-Dreh")
+            try? fmx.createDirectory(at: dreh, withIntermediateDirectories: true)
+            let shortSrc = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")   // 3 s
+            let longSrc = root.appendingPathComponent("Videos/iPhone/Quer/IMG_0001.MOV")                // 7 s
+            let t0 = Date(timeIntervalSince1970: 1_760_100_000)
+            for (src, name, m) in [(shortSrc, "C0601.MP4", 0.0), (longSrc, "IMG_0601.MOV", 1.0)] {
+                let u = dreh.appendingPathComponent(name); try? fmx.copyItem(at: src, to: u)
+                try? fmx.setAttributes([.modificationDate: t0.addingTimeInterval(m * 60)], ofItemAtPath: u.path)
+            }
+            store.compactLayout = true
+            store.levels = ["scene", "length"]; store.nestLevels = true
+            store.lengthThreshold = 5; store.lengthShort = "Einblendungen"; store.lengthLong = "Hauptspur"
+            sorter.reset(); sorter.addFolders([dreh]); sorter.start()
+            while sorter.phase != .done && sorter.phase != .cancelled {
+                if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
+                if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let tree = ((try? fmx.subpathsOfDirectory(atPath: dreh.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
+            report.append("ℹ️ Baukasten (Szene › Länge): " + tree.joined(separator: " | "))
+            check(tree.contains { $0.hasSuffix("/Einblendungen/C0601.MP4") && $0.hasPrefix("Videos/Szene 01") }, "Baukasten: kurzer Clip → Szene 01/Einblendungen")
+            check(tree.contains { $0.hasSuffix("/Hauptspur/IMG_0601.MOV") && $0.hasPrefix("Videos/Szene 01") }, "Baukasten: langer Clip → Szene 01/Hauptspur")
+            // umschalten auf „ein Ordner“ + Kamera › Länge → bestehender Dreh wird neu geordnet
+            store.levels = ["camera", "length"]; store.nestLevels = false
+            sorter.reset(); sorter.addFolders([dreh]); sorter.start()
+            while sorter.phase != .done && sorter.phase != .cancelled {
+                if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion, remember: false) }
+                if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let tree2 = ((try? fmx.subpathsOfDirectory(atPath: dreh.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
+            report.append("ℹ️ Baukasten (Kamera + Länge): " + tree2.joined(separator: " | "))
+            check(tree2.contains("Videos/Sony Alpha 1 · Einblendungen/C0601.MP4") && tree2.contains("Videos/iPhone · Hauptspur/IMG_0601.MOV"),
+                  "Baukasten umgestellt → Dreh neu geordnet, ein Ordnername")
+            check(tree2.filter { $0.hasSuffix(".MP4") || $0.hasSuffix(".MOV") }.count == 2, "Baukasten: keine Duplikate")
+            check(!tree2.contains { $0.hasPrefix("Videos/Szene") }, "Alte leere Szenen-Ordner aufgeräumt")
+            store.levels = ["scene"]; store.nestLevels = false; store.compactLayout = false
+        }
+
         // 7) Weitere Ansichten
         render(SettingsView(), "12-einstellungen", w: 480, h: 620, sheet: true)
         store.droneBySpeed = true

@@ -191,8 +191,10 @@ struct IdleView: View {
         var p: [String] = []
         p.append(store.includeSubfolders ? "mit Unterordnern" : "ohne Unterordner")
         if store.confirmCameras { p.append("Kameras nachfragen") }
-        if store.sortByLens { p.append("nach Objektiv") }
-        if store.droneBySpeed { p.append("Drohne: Stand/Fahrt") }
+        if store.compactLayout {
+            let names = store.levels.compactMap { id in LearnedStore.allLevels.first { $0.id == id }?.name.components(separatedBy: " (").first }
+            p.append("Ordner: " + (names.isEmpty ? "alles in Videos" : names.joined(separator: store.nestLevels ? " › " : " + ")))
+        }
         return "Einstellungen: " + p.joined(separator: " · ")
     }
     @State private var pulse = false
@@ -831,28 +833,15 @@ struct SettingsView: View {
                         Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
                     }
                     if store.compactLayout {
-                        WithHelp(title: "Videos ordnen nach", text: "Szene: Alles, was zusammenhängend gedreht wurde, landet in einem Ordner – über alle Kameras hinweg, in Aufnahme-Reihenfolge. Ideal, wenn du z. B. Einblendungen mit Kamera A drehst und dann auf Kamera B wechselst. Eine neue Szene beginnt nach einer Drehpause (einstellbar). Kamera und Hochkant/Quer stehen als Finder-Tag an jedem Clip (Spalte „Tags“ im Finder).\n\nKamera: ein Ordner pro Kamera, z. B. Sony Alpha 1 · Quer.\n\nIn beiden Fällen liegt jeder Clip nur einmal vor – nichts wird kopiert.") {
-                            Picker("Videos ordnen nach", selection: $store.groupByScene) {
-                                Text("Szene").tag(true); Text("Kamera").tag(false)
-                            }.pickerStyle(.segmented).frame(width: 220)
-                        }
-                        if store.groupByScene {
-                            Stepper("Neue Szene nach \(Int(store.sceneGapMinutes)) Min. Pause", value: $store.sceneGapMinutes, in: 1...60, step: 1)
-                                .font(.system(size: 12))
-                        }
+                        LevelBuilder()
+                    } else {
+                        Text("Beispiel: Dreh 1/Videos/Sony Alpha 1/Quer").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
-                    Text(!store.compactLayout ? "Beispiel: Dreh 1/Videos/Sony Alpha 1/Quer"
-                         : store.groupByScene ? "Beispiel: Dreh 1/Videos/Szene 02 · 10.14 · Sony Alpha 1 + Sony ZV-E1"
-                         : "Beispiel: Dreh 1/Videos/Sony Alpha 1 · FE 24-70 · Quer")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     WithHelp(title: "Unterordner durchsuchen", text: "An: CamSort schaut auch in alle Unterordner des gewählten Ordners und sortiert jede Datei in dem Ordner ein, in dem sie liegt. Ordner, die CamSort selbst angelegt hat (Videos, Fotos, XML …), werden dabei übersprungen.\nAus: Nur Dateien, die direkt im gewählten Ordner liegen, werden sortiert.") {
                         Toggle("Auch Unterordner durchsuchen", isOn: $store.includeSubfolders)
                     }
                     WithHelp(title: "Kameras nachfragen", text: "An: Bei jeder neuen Kamera fragt CamSort einmal, unter welchem Namen sie einsortiert werden soll, und merkt sich die Antwort dauerhaft (siehe „Gelernt“ oben rechts).\nAus: Erkannte Kameras werden ohne Rückfrage einsortiert, unbekannte landen in „Unbekannt“.") {
                         Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
-                    }
-                    WithHelp(title: "Nach Objektiv sortieren", text: "Legt unter jeder Kamera einen zusätzlichen Ordner pro Objektiv an, z. B. Videos/Sony Alpha 1/FE 24-70mm F2.8 GM II/Quer. Klappt nur, wenn die Kamera das Objektiv mitspeichert – bei Sony zuverlässig. Clips ohne Objektiv-Angabe landen in „Objektiv unbekannt“.") {
-                        Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
                     }
 
                     section("Ordner & Namen")
@@ -894,13 +883,14 @@ struct SettingsView: View {
                         TextField("Endungen stabilisierter Dateien", text: $store.gyroSuffixes).textFieldStyle(.roundedBorder)
                     }
 
-                    section("Drohne")
-                    WithHelp(title: "Nach Geschwindigkeit sortieren", text: "CamSort liest die SRT-Datei jedes Drohnen-Clips, berechnet aus den GPS-Positionen die Durchschnittsgeschwindigkeit und legt Ordner „Stand“, „Fahrt“ oder „Dazwischen“ an. Clips ohne GPS-Signal landen in „Ohne GPS“. Die Bereiche stellst du mit den Reglern ein.") {
+                    if !store.compactLayout {
+                        section("Drohne (ausführliche Struktur)")
                         Toggle("Drohnen-Clips nach Geschwindigkeit sortieren", isOn: $store.droneBySpeed.animation())
-                    }
-                    if store.droneBySpeed {
-                        SpeedRange(title: "Stand", icon: "pause.circle.fill", min: $store.standMin, max: $store.standMax, limit: 30)
-                        SpeedRange(title: "Fahrt", icon: "airplane", min: $store.moveMin, max: $store.moveMax, limit: 150)
+                        Toggle("Videos zusätzlich nach Objektiv sortieren", isOn: $store.sortByLens)
+                        if store.droneBySpeed {
+                            SpeedRange(title: "Stand", icon: "pause.circle.fill", min: $store.standMin, max: $store.standMax, limit: 30)
+                            SpeedRange(title: "Fahrt", icon: "airplane", min: $store.moveMin, max: $store.moveMax, limit: 150)
+                        }
                     }
                 }
                 .padding(.trailing, 6)
@@ -1150,12 +1140,6 @@ struct FolderNamingEditor: View {
                 }
                 .textFieldStyle(.roundedBorder).controlSize(.small)
             }
-            WithHelp(title: "Ordnername bei „Kamera“", text: "Was im Namen der Video-Ordner steht, wenn nach Kamera geordnet wird. Das Objektiv kommt dazu, wenn „Nach Objektiv sortieren“ an ist.") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Kamera im Namen", isOn: $showCamera)
-                    Toggle("Hochkant/Quer im Namen", isOn: $showOrientation)
-                }.font(.system(size: 12))
-            }
             WithHelp(title: "Ordnername bei „Szene“", text: "Wie Szenen-Ordner heißen. Statt „Szene“ geht z. B. auch „Take“ oder „Einstellung“.") {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack { Text("Wort").font(.system(size: 11)); TextField("Szene", text: $sceneWord).textFieldStyle(.roundedBorder).controlSize(.small).frame(width: 120) }
@@ -1170,7 +1154,7 @@ struct FolderNamingEditor: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Vorschau").font(.system(size: 11, weight: .semibold))
-                Text("Dreh/\(videos)/\(store.groupByScene ? sampleScene : sampleCamFolder)/C0001.MP4")
+                Text("Dreh/\(videos)/\(LevelBuilder.samplePath(store, separator: separator))C0001.MP4")
                 Text("Dreh/\(photos)/ · Dreh/\(side)/ · Dreh/\(extras)/")
             }
             .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
@@ -1178,5 +1162,91 @@ struct FolderNamingEditor: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
         }
         .toggleStyle(.switch).controlSize(.small)
+    }
+}
+
+
+/// Ordner-Baukasten: Kriterien an/aus, Reihenfolge, ein Ordner oder Unterordner – mit Vorschau
+struct LevelBuilder: View {
+    @EnvironmentObject var store: LearnedStore
+    @AppStorage("fnSeparator") private var separator = " · "
+
+    static func sample(_ id: String, _ s: LearnedStore) -> String {
+        switch id {
+        case "scene": return "Szene 02 · 10.14 · Sony Alpha 1 + Sony ZV-E1"
+        case "camera": return "Sony Alpha 1"
+        case "lens": return "FE 24-70"
+        case "length": return s.lengthShort
+        case "orientation": return "Quer"
+        case "speed": return "Fahrt"
+        default: return id
+        }
+    }
+    static func samplePath(_ s: LearnedStore, separator: String) -> String {
+        let parts = s.levels.map { sample($0, s) }
+        if parts.isEmpty { return "" }
+        return (s.nestLevels ? parts.joined(separator: "/") : parts.joined(separator: separator)) + "/"
+    }
+
+    private var ordered: [(id: String, name: String, icon: String)] {
+        let on = store.levels.compactMap { id in LearnedStore.allLevels.first { $0.id == id } }
+        let off = LearnedStore.allLevels.filter { !store.levels.contains($0.id) }
+        return on + off
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            WithHelp(title: "Ordner-Aufbau", text: "Hier legst du fest, wonach die Videos in jedem Dreh geordnet werden. Kriterien einschalten und mit den Pfeilen sortieren – oben = zuerst.\n\n„Ein Ordner“: alles steht in EINEM Ordnernamen (z. B. Szene 02 · Einblendungen). „Unterordner“: jedes Kriterium ist eine eigene Ebene (Szene 02 / Einblendungen).\n\nWas nicht im Ordner steht (z. B. Kamera, Hochkant/Quer), kommt als Finder-Tag an den Clip. Jeder Clip liegt nur einmal vor – nichts wird kopiert. Beim nächsten „Aktualisieren“ ordnet CamSort bestehende Drehs nach dem neuen Aufbau um.") {
+                Picker("Aufbau", selection: $store.nestLevels) {
+                    Text("Ein Ordner").tag(false); Text("Unterordner").tag(true)
+                }.pickerStyle(.segmented).frame(width: 220)
+            }
+            ForEach(ordered, id: \.id) { lvl in
+                let on = store.levels.contains(lvl.id)
+                let idx = store.levels.firstIndex(of: lvl.id)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Toggle(isOn: Binding(get: { on }, set: { v in
+                            if v { store.levels.append(lvl.id) } else { store.levels.removeAll { $0 == lvl.id } }
+                        })) { Label(lvl.name, systemImage: lvl.icon).font(.system(size: 12)) }
+                        Spacer()
+                        if let i = idx {
+                            Text("\(i + 1).").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
+                            Button { store.levels.swapAt(i, i - 1) } label: { Image(systemName: "chevron.up") }
+                                .disabled(i == 0)
+                            Button { store.levels.swapAt(i, i + 1) } label: { Image(systemName: "chevron.down") }
+                                .disabled(i == store.levels.count - 1)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    if on && lvl.id == "scene" {
+                        Stepper("Neue Szene nach \(Int(store.sceneGapMinutes)) Min. Pause", value: $store.sceneGapMinutes, in: 1...60, step: 1)
+                            .font(.system(size: 11)).padding(.leading, 26)
+                    }
+                    if on && lvl.id == "length" {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Stepper("Kurz bis \(Int(store.lengthThreshold)) Sek.", value: $store.lengthThreshold, in: 5...600, step: 5)
+                            HStack {
+                                TextField("Kurz", text: $store.lengthShort).frame(width: 130)
+                                Text("bis \(Int(store.lengthThreshold)) s · darüber")
+                                TextField("Lang", text: $store.lengthLong).frame(width: 110)
+                            }.textFieldStyle(.roundedBorder)
+                        }
+                        .font(.system(size: 11)).controlSize(.small).padding(.leading, 26)
+                    }
+                    if on && lvl.id == "speed" {
+                        VStack {
+                            SpeedRange(title: "Stand", icon: "pause.circle.fill", min: $store.standMin, max: $store.standMax, limit: 30)
+                            SpeedRange(title: "Fahrt", icon: "airplane", min: $store.moveMin, max: $store.moveMax, limit: 150)
+                        }.padding(.leading, 26)
+                    }
+                }
+            }
+            .toggleStyle(.switch).controlSize(.small)
+            Text("Vorschau: Dreh/\(FolderNames.videos)/\(LevelBuilder.samplePath(store, separator: separator))C0001.MP4")
+                .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        }
     }
 }
