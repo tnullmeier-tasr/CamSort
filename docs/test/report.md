@@ -30,7 +30,7 @@
 - ℹ️ Vergebene Tags gesamt: Auto×1, Fahrzeug×1, Felge×1, Himmel×1, Porsche×1, Rad×1, Reifen×1
 - ℹ️ Tag-Fehler: keine
 - ✅ Video nach dem Taggen unverändert lesbar
-- ✅ Karte: 2 Aufnahmetage erkannt (["Sa., 17.10.2026: 2", "Mo., 07.09.2026: 1"])
+- ✅ Karte: 2 Aufnahmetage erkannt (["So., 18.10.2026: 2", "Di., 08.09.2026: 1"])
 - ✅ Sony-Vorschaubilder (THMBNL) werden nicht importiert
 - ✅ Import: neuer Tag kopiert, geprüft und einsortiert
 - ✅ Import: alter Tag NICHT kopiert
@@ -51,7 +51,7 @@
 - ✅ Drehen: nur die Dreh-Angabe geändert (7 Byte von 71905)
 - ✅ Drehen: eingebettete Sony-Metadaten erhalten
 - ✅ Viermal drehen = bitgenau die Originaldatei
-- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-17 23:22:06 +0000 / 2026-10-17 23:22:06 +0000)
+- ✅ Drehen: Dateidatum bleibt unverändert (2026-10-18 11:34:56 +0000 / 2026-10-18 11:34:56 +0000)
 - ✅ Final-Cut-Mediathek im Ordner erkannt
 - ✅ Clips wurden verschoben → Hinweis „Neu verknüpfen“ erscheint
 - ✅ Mediathek-Inhalt bitgenau unverändert (inkl. Verknüpfungen), nur als Ganzes verschoben
@@ -67,5 +67,12 @@
 - ✅ Preset bleibt nutzbar, auch wenn das Original gelöscht wurde
 - ✅ Mit Preset kommt keine Preset-Meldung mehr („Gyroflow wurde nicht gefunden. Bitte unter Einstel…“)
 - ✅ Falsche Datei wird abgelehnt
+- ℹ️ Baukasten (Szene › Länge): Videos | Videos/Szene 01 · 12.39 · Sony Alpha 1 + iPhone | Videos/Szene 01 · 12.39 · Sony Alpha 1 + iPhone/Einblendungen | Videos/Szene 01 · 12.39 · Sony Alpha 1 + iPhone/Einblendungen/C0601.MP4 | Videos/Szene 01 · 12.39 · Sony Alpha 1 + iPhone/Hauptspur | Videos/Szene 01 · 12.39 · Sony Alpha 1 + iPhone/Hauptspur/IMG_0601.MOV
+- ✅ Baukasten: kurzer Clip → Szene 01/Einblendungen
+- ✅ Baukasten: langer Clip → Szene 01/Hauptspur
+- ℹ️ Baukasten (Kamera + Länge): Videos | Videos/Sony Alpha 1 · Einblendungen | Videos/Sony Alpha 1 · Einblendungen/C0601.MP4 | Videos/iPhone · Hauptspur | Videos/iPhone · Hauptspur/IMG_0601.MOV
+- ✅ Baukasten umgestellt → Dreh neu geordnet, ein Ordnername
+- ✅ Baukasten: keine Duplikate
+- ✅ Alte leere Szenen-Ordner aufgeräumt
 
 Fehlgeschlagen: 0
