@@ -5,3 +5,6 @@
 *.pem
 *.key
 *.log
+
+# Sicherheitsregister (Schwachstellenkarte, nicht öffentlich)
+.security-audit/
