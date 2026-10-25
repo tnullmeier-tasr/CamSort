@@ -1,0 +1,7 @@
+
+# Geheimnisse und Logs nie einchecken
+.env
+*.p12
+*.pem
+*.key
+*.log
