@@ -56,6 +56,21 @@ enum Theme {
     static let card = Color.white.opacity(0.08)
 }
 
+extension View {
+    /// Karte im Glas-Look: leichte Füllung, feine helle Kontur, weicher Schatten.
+    func glassBackground(_ radius: CGFloat) -> some View {
+        self.background(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Theme.card)
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.13), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.16), radius: 10, x: 0, y: 5)
+        )
+    }
+}
+
 // MARK: - Hauptansicht
 
 struct ContentView: View {
@@ -72,6 +87,10 @@ struct ContentView: View {
         ZStack {
             LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
+            RadialGradient(colors: [Theme.mint.opacity(0.16), Color.clear], center: .topTrailing, startRadius: 0, endRadius: 520)
+                .ignoresSafeArea().allowsHitTesting(false)
+            RadialGradient(colors: [Theme.orange.opacity(0.14), Color.clear], center: .bottomLeading, startRadius: 0, endRadius: 480)
+                .ignoresSafeArea().allowsHitTesting(false)
             VStack(spacing: 0) {
                 Header()
                     .padding(.top, 34)
@@ -249,7 +268,7 @@ struct IdleView: View {
                         }
                         .font(.system(size: 13, weight: .medium))
                         .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
+                        .glassBackground(10)
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
@@ -265,7 +284,7 @@ struct IdleView: View {
                 }
                 .font(.system(size: 12, weight: .medium))
                 .padding(12)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                .glassBackground(12)
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
@@ -275,7 +294,7 @@ struct IdleView: View {
                     Label("Von Speicherkarte importieren", systemImage: "sdcard.fill")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .frame(maxWidth: .infinity).frame(height: 38)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                        .glassBackground(12)
                 }
                 .buttonStyle(.plain)
                 HelpButton(title: "Von Speicherkarte importieren",
@@ -293,6 +312,7 @@ struct IdleView: View {
                         .fill(LinearGradient(colors: [Theme.orange, Color(red: 1, green: 0.5, blue: 0.3)],
                                              startPoint: .leading, endPoint: .trailing)))
                     .foregroundStyle(.white)
+                    .shadow(color: Theme.orange.opacity(sorter.folders.isEmpty ? 0 : 0.40), radius: 14, x: 0, y: 6)
                     .opacity(sorter.folders.isEmpty ? 0.35 : 1)
             }
             .buttonStyle(.plain)
@@ -303,12 +323,12 @@ struct IdleView: View {
                     Button { timeline.open(folders: sorter.folders) } label: {
                         Label("Zeitleiste", systemImage: "clock.arrow.2.circlepath")
                             .frame(maxWidth: .infinity).frame(height: 38)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                            .glassBackground(12)
                     }.buttonStyle(.plain)
                     Button { browser.open(folders: sorter.folders) } label: {
                         Label("Ansehen & drehen", systemImage: "rotate.right")
                             .frame(maxWidth: .infinity).frame(height: 38)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                            .glassBackground(12)
                     }.buttonStyle(.plain)
                 }
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
@@ -422,7 +442,7 @@ struct CountGrid: View {
                     Text(item.key).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.6))
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 14).fill(Theme.card))
+                .glassBackground(14)
                 .scaleEffect(item.n > 0 ? 1 : 0.97)
                 .opacity(item.n > 0 ? 1 : 0.5)
                 .animation(.spring(response: 0.4, dampingFraction: 0.6), value: item.n > 0)
@@ -524,12 +544,12 @@ struct DoneView: View {
                 Button { timeline.open(folders: sorter.folders) } label: {
                     Label("Zeitleiste", systemImage: "clock.arrow.2.circlepath")
                         .frame(maxWidth: .infinity).frame(height: 40)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                        .glassBackground(12)
                 }.buttonStyle(.plain)
                 Button { browser.open(folders: sorter.folders) } label: {
                     Label("Ansehen & drehen", systemImage: "rotate.right")
                         .frame(maxWidth: .infinity).frame(height: 40)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                        .glassBackground(12)
                 }.buttonStyle(.plain)
             }
             .font(.system(size: 13, weight: .semibold, design: .rounded))
@@ -538,7 +558,7 @@ struct DoneView: View {
                 Button { sorter.revealInFinder() } label: {
                     Label("Im Finder zeigen", systemImage: "folder")
                         .frame(maxWidth: .infinity).frame(height: 44)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.card))
+                        .glassBackground(12)
                 }.buttonStyle(.plain)
                 Button { withAnimation { sorter.reset() } } label: {
                     Label("Neue Ordner", systemImage: "arrow.counterclockwise")
