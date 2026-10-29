@@ -26,12 +26,13 @@ final class SelectsRunner: ObservableObject {
     var progress: Double { total == 0 ? 0 : Double(index) / Double(total) }
 
     // Einstellungen
-    @AppStorage("selSegment") var segmentLength = 4.0
-    @AppStorage("selKeepPercent") var keepPercent = 30.0
-    @AppStorage("selWFocus") var wFocus = 1.0
-    @AppStorage("selWExposure") var wExposure = 1.0
-    @AppStorage("selWCalm") var wCalm = 1.0
-    @AppStorage("selPreferStabilized") var preferStabilized = true
+    private static let d = UserDefaults.standard
+    @Published var segmentLength: Double = d.object(forKey: "selSegment") as? Double ?? 4 { didSet { Self.d.set(segmentLength, forKey: "selSegment") } }
+    @Published var keepPercent: Double = d.object(forKey: "selKeepPercent") as? Double ?? 30 { didSet { Self.d.set(keepPercent, forKey: "selKeepPercent") } }
+    @Published var wFocus: Double = d.object(forKey: "selWFocus") as? Double ?? 1 { didSet { Self.d.set(wFocus, forKey: "selWFocus") } }
+    @Published var wExposure: Double = d.object(forKey: "selWExposure") as? Double ?? 1 { didSet { Self.d.set(wExposure, forKey: "selWExposure") } }
+    @Published var wCalm: Double = d.object(forKey: "selWCalm") as? Double ?? 1 { didSet { Self.d.set(wCalm, forKey: "selWCalm") } }
+    @Published var preferStabilized: Bool = d.object(forKey: "selPreferStabilized") as? Bool ?? true { didSet { Self.d.set(preferStabilized, forKey: "selPreferStabilized") } }
 
     func start(folders: [URL], suffixes: [String]) {
         cancelled = false; kept = []; outputs = []; errors = []; index = 0; analyzedSeconds = 0
