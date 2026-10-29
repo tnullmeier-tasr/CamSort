@@ -43,7 +43,7 @@ final class GyroNotifier: ObservableObject {
             let p: [String: Any] = [
                 "Label": Self.label,
                 "ProgramArguments": ["/bin/bash", script.path],
-                "StartInterval": 30,
+                "StartInterval": 60,
                 "RunAtLoad": true,
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: p, format: .xml, options: 0)
@@ -83,7 +83,7 @@ final class GyroNotifier: ObservableObject {
         do { try p.run(); p.waitUntilExit(); return p.terminationStatus } catch { return -1 }
     }
 
-    /// Bash 3.2 (macOS-Standard). Alle 30 s: läuft Gyroflow? Wenn es lief und seit 90 s ruht → eine Nachricht.
+    /// Bash 3.2 (macOS-Standard). Alle 60 s: läuft Gyroflow? Wenn es lief und seit 2 Min. ruht → eine Nachricht.
     static let scriptText = #"""
 #!/bin/bash
 DIR="$HOME/Library/Application Support/CamSort/Benachrichtigung"
@@ -126,7 +126,7 @@ fi
 
 [ -z "$start" ] && exit 0
 idle=$((idle + 1))
-if [ $idle -ge 3 ]; then
+if [ $idle -ge 2 ]; then
   mins=$(( (now - start) / 60 ))
   send "🎬 Gyroflow ist fertig – alle Clips sind gerendert ($(date +%H:%M) Uhr, Dauer ca. ${mins} Min.)."
   rm -f "$STATE"
