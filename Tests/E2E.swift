@@ -38,6 +38,7 @@ struct E2E {
         let tagger = TagRunner()
         let theme = ThemeSettings()
         let timelineM = TimelineModel()
+        let selM = SelectsRunner()
 
         func render<V: View>(_ v: V, _ name: String, w: CGFloat = 580, h: CGFloat = 780, sheet: Bool = false) {
             let content = Group {
@@ -51,7 +52,7 @@ struct E2E {
                 }
             }
             .environmentObject(sorter).environmentObject(store).environmentObject(theme)
-            .environmentObject(gyro).environmentObject(tagger).environmentObject(timelineM).environmentObject(ClipBrowser())
+            .environmentObject(gyro).environmentObject(tagger).environmentObject(timelineM).environmentObject(ClipBrowser()).environmentObject(selM)
             .frame(width: w, height: h)
             .environment(\.colorScheme, .dark)
             let r = ImageRenderer(content: content)
@@ -451,6 +452,33 @@ struct E2E {
             check(tree2.filter { $0.hasSuffix(".MP4") || $0.hasSuffix(".MOV") }.count == 2, "Baukasten: keine Duplikate")
             check(!tree2.contains { $0.hasPrefix("Videos/Szene") }, "Alte leere Szenen-Ordner aufgeräumt")
             store.levels = ["scene"]; store.nestLevels = false; store.compactLayout = false
+        }
+
+        // 6j) Beste Momente: Analyse + FCPXML
+        do {
+            let fmx = FileManager.default
+            selM.segmentLength = 1; selM.keepPercent = 50
+            selM.start(folders: [root], suffixes: store.gyroSuffixList)
+            let t0 = Date()
+            while selM.state == .running && Date().timeIntervalSince(t0) < 300 { try? await Task.sleep(nanoseconds: 100_000_000) }
+            render(SelectsView(), "18-beste-momente")
+            check(selM.state == .finished, "Beste Momente: Analyse läuft durch (\(selM.total) Clips, \(Int(selM.analyzedSeconds)) s Material in \(String(format: "%.1f", selM.eta.elapsed)) s)")
+            check(!selM.kept.isEmpty && !selM.outputs.isEmpty, "Beste Momente: \(selM.kept.count) Abschnitte behalten, \(selM.outputs.count) Final-Cut-Datei(en)")
+            if let o = selM.outputs.first, let data = try? Data(contentsOf: o) {
+                final class P: NSObject, XMLParserDelegate {
+                    var srcs: [String] = []; var clips = 0; var ok = true
+                    func parser(_ p: XMLParser, didStartElement e: String, namespaceURI: String?, qualifiedName: String?, attributes a: [String: String]) {
+                        if e == "media-rep", let s = a["src"] { srcs.append(s) }
+                        if e == "asset-clip" { clips += 1; for k in ["offset", "start", "duration"] where !(a[k] ?? "").hasSuffix("s") { ok = false } }
+                    }
+                }
+                let p = P(); let xp = XMLParser(data: data); xp.delegate = p
+                check(xp.parse(), "FCPXML ist gültiges XML (\(o.lastPathComponent))")
+                check(p.clips > 0 && p.ok, "FCPXML: \(p.clips) Abschnitte mit Zeitangaben im Final-Cut-Format")
+                check(!p.srcs.isEmpty && p.srcs.allSatisfy { URL(string: $0).map { fmx.fileExists(atPath: $0.path) } ?? false }, "FCPXML verweist auf die echten Clips am Originalort (nichts kopiert)")
+                try? fmx.copyItem(at: o, to: outDir.appendingPathComponent("beispiel-beste-momente.fcpxml"))
+            }
+            selM.close()
         }
 
         // 7) Weitere Ansichten

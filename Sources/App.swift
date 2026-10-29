@@ -13,6 +13,7 @@ struct CamSortApp: App {
     @StateObject private var tagger = TagRunner()
     @StateObject private var timeline = TimelineModel()
     @StateObject private var browser = ClipBrowser()
+    @StateObject private var selects = SelectsRunner()
     @StateObject private var importer: ImportRunner
 
     init() {
@@ -35,6 +36,7 @@ struct CamSortApp: App {
                 .environmentObject(importer)
                 .environmentObject(timeline)
                 .environmentObject(browser)
+                .environmentObject(selects)
                 .frame(minWidth: 560, idealWidth: 580, minHeight: 720, idealHeight: 780)
         }
         .windowStyle(.hiddenTitleBar)
@@ -82,6 +84,7 @@ struct ContentView: View {
     @EnvironmentObject var importer: ImportRunner
     @EnvironmentObject var timeline: TimelineModel
     @EnvironmentObject var browser: ClipBrowser
+    @EnvironmentObject var selects: SelectsRunner
 
     var body: some View {
         ZStack {
@@ -95,7 +98,9 @@ struct ContentView: View {
                 Header()
                     .padding(.top, 34)
                 Group {
-                    if importer.active {
+                    if selects.active {
+                        SelectsView()
+                    } else if importer.active {
                         ImportView()
                     } else if gyro.active {
                         GyroView()
@@ -121,6 +126,7 @@ struct ContentView: View {
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: gyro.active)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: tagger.active)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: importer.active)
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: selects.active)
         .background(Color.clear.sheet(isPresented: $browser.show) { ClipBrowserSheet().environmentObject(browser) })
         .sheet(isPresented: $timeline.show) {
             TimelineSheet().environmentObject(timeline).environmentObject(sorter)
@@ -199,6 +205,7 @@ struct Header: View {
 // MARK: - Start
 
 struct IdleView: View {
+    @EnvironmentObject var selects: SelectsRunner
     @EnvironmentObject var timeline: TimelineModel
     @EnvironmentObject var browser: ClipBrowser
     @EnvironmentObject var sorter: Sorter
@@ -287,7 +294,7 @@ struct IdleView: View {
                 .glassBackground(12)
             }
             .buttonStyle(.plain)
-            .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
+            .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store).environmentObject(selects) }
 
             HStack(spacing: 8) {
                 Button { importer.open() } label: {
@@ -459,6 +466,8 @@ struct DoneView: View {
     @EnvironmentObject var tagger: TagRunner
     @EnvironmentObject var timeline: TimelineModel
     @EnvironmentObject var browser: ClipBrowser
+    @EnvironmentObject var selects: SelectsRunner
+    @AppStorage("selEnabled") private var selEnabled = true
     @EnvironmentObject var store: LearnedStore
     @State private var pop = false
     @State private var showProblems = true
@@ -512,6 +521,18 @@ struct DoneView: View {
 
             if !cancelled && !sorter.fcpLibraries.isEmpty && sorter.movedVideos > 0 {
                 FCPRelinkCard(libraries: sorter.fcpLibraries)
+            }
+            if !cancelled && selEnabled {
+                HStack(spacing: 8) {
+                    Button { selects.start(folders: sorter.folders, suffixes: store.gyroSuffixList) } label: {
+                        Label("Beste Momente finden → Final Cut", systemImage: "sparkles")
+                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient(colors: [Theme.mint.opacity(0.35), Theme.orange.opacity(0.35)], startPoint: .leading, endPoint: .trailing)))
+                    }.buttonStyle(.plain)
+                    HelpButton(title: "Beste Momente finden",
+                               text: "Analysiert alle sortierten Clips lokal und ohne KI nach Schärfe, Belichtung und Ruhe, behält die besten Abschnitte und legt sie als Projekt „Beste Momente“ in eine Final-Cut-Datei im Dreh-Ordner – ein Klick öffnet sie in Final Cut. Die Clips werden nur verknüpft, nichts wird kopiert oder verändert. Abschnittslänge, Anteil und Gewichtung stellst du in den Einstellungen ein.")
+                }
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
             if !cancelled && store.enableTagging {
                 HStack(spacing: 8) {
@@ -872,6 +893,9 @@ struct SettingsView: View {
                         Text("Ordner für Exporte, Soundeffekte & Co.").font(.system(size: 12))
                     }
                     SpecialFoldersEditor()
+
+                    section("Beste Momente")
+                    SelectsSettingsBlock()
 
                     section("Verschlagworten")
                     WithHelp(title: "Verschlagworten aktivieren", text: "An: Nach dem Sortieren erscheint der Knopf „Clips verschlagworten“. CamSort erkennt dann lokal und offline, was in den Clips zu sehen ist (Person, Auto, Motorrad, Straße …), liest Schriftzüge und erkennt so Automarken, und ergänzt alles als Finder-Tags. Die Videodateien werden dabei nicht verändert.\n\nIn Final Cut beim Import „Finder-Tags als Schlagwörter“ anhaken, dann stehen die Begriffe dort direkt als Schlagwörter bereit.\n\nAus: Kein Knopf, keine Analyse.") {
@@ -1267,6 +1291,17 @@ struct LevelBuilder: View {
                 .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        }
+    }
+}
+
+
+struct SelectsSettingsBlock: View {
+    @AppStorage("selEnabled") private var enabled = true
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Knopf „Beste Momente finden“ nach dem Sortieren", isOn: $enabled).toggleStyle(.switch).font(.system(size: 12))
+            if enabled { SelectsSettings() }
         }
     }
 }
