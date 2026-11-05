@@ -5,7 +5,7 @@
 ![CamSort nach dem Sortieren](docs/screenshot-fertig.png)
 
 ## Installation
-1. Unter **Releases** die neueste `CamSort.zip` laden, entpacken, **CamSort** in den Programme-Ordner ziehen.
+1. Lokal bauen: `./build.sh` (Xcode bzw. Command Line Tools nötig) → `build/CamSort.app` (Universal) und `build/CamSort.zip`. **CamSort** in den Programme-Ordner ziehen. Ältere Versionen gibt es unter **Releases**.
 2. Einmalig im Terminal (die App ist nicht bei Apple registriert):
    ```
    xattr -dr com.apple.quarantine /Applications/CamSort.app

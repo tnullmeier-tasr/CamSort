@@ -74,7 +74,7 @@ final class SelectsRunner: ObservableObject {
 
     private func run(_ byDreh: [URL: [URL]]) async {
         for (dreh, clips) in byDreh.sorted(by: { $0.key.path < $1.key.path }) {
-            var raw: [(URL, [Self.Window])] = []
+            var raw: [(URL, [Window])] = []
             for c in clips {
                 if cancelled { state = .idle; return }
                 currentFile = c.lastPathComponent

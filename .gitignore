@@ -8,3 +8,14 @@
 
 # Sicherheitsregister (Schwachstellenkarte, nicht öffentlich)
 .security-audit/
+.DS_Store
+.venv/
+.venv-bau/
+build/
+.build/
+*-debug*.json
+anim*.mov
+anim*.mp4
+pw-browsers/
+node_modules/
+*.pt
