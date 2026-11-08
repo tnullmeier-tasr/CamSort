@@ -55,6 +55,9 @@ SW
 swift /tmp/txt.swift && $FF -loop 1 -i /tmp/porsche.png -t 7 -vf "scale=1920:1080" -pix_fmt yuv420p -c:v libx264 "$D/IMG_0001.MOV" && echo "PORSCHE-Clip erzeugt"
 # Clip im Unterordner
 $FF -f lavfi -i testsrc=size=1280x720:rate=25 -t 2 -pix_fmt yuv420p "$D/Unterordner/MVI_1234.MP4"
+# Quadratischer Clip (wie DJI Osmo Action 6, 1:1) für den Modus „Meine Kameraordner“ – außerhalb des Testordners
+X="$(dirname "$D")/CamSort-Extra"; mkdir -p "$X"
+$FF -f lavfi -i testsrc=size=960x960:rate=25 -t 2 -pix_fmt yuv420p "$X/Q0001.MP4"
 # Fotos, Musik, ZIP, unbekannter Typ
 $FF -f lavfi -i testsrc=size=800x600 -frames:v 1 "$D/IMG_0002.JPG"
 $FF -f lavfi -i sine=frequency=440:duration=2 "$D/Musik_Intro.mp3"

@@ -74,9 +74,18 @@ final class TimelineModel: ObservableObject {
         let c = u.pathComponents
         if let i = c.lastIndex(where: FolderNames.isVideos), i + 1 < c.count - 1 {
             let n = c[i + 1].components(separatedBy: FolderNames.separator).first ?? c[i + 1]
-            return ["Hochkant", "Quer", "Stand", "Fahrt", "Dazwischen", "Ohne GPS"].contains(n) ? "Kamera" : n
+            return ["Hochkant", "Quer", "Quadratisch", FolderNames.square, "Stand", "Fahrt", "Dazwischen", "Ohne GPS"].contains(n) ? "Kamera" : n
         }
         if c.contains(where: FolderNames.isVideos) { return "Kamera" }
+        // Modus „Meine Kameraordner“: <Kamera>/[Zusatzebenen]/Hochkant|Quer/Clip
+        if let i = c.dropLast().lastIndex(where: FolderNames.isOrientation), i > 0 {
+            let d = UserDefaults.standard
+            let extra: Set<String> = ["Stand", "Fahrt", "Dazwischen", "Ohne GPS", "Objektiv unbekannt",
+                                      d.string(forKey: "lengthShort") ?? "Einblendungen", d.string(forKey: "lengthLong") ?? "Hauptspur"]
+            var j = i - 1
+            while j > 0 && c[j].components(separatedBy: FolderNames.separator).allSatisfy({ extra.contains($0) || $0.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil }) { j -= 1 }
+            return c[j]
+        }
         return u.deletingLastPathComponent().lastPathComponent
     }
 

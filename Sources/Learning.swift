@@ -73,6 +73,64 @@ final class LearnedStore: ObservableObject {
     @Published var lengthShort: String { didSet { d.set(lengthShort, forKey: "lengthShort") } }
     @Published var lengthLong: String { didSet { d.set(lengthLong, forKey: "lengthLong") } }
     private var syncing = false
+    /// Modus „Meine Kameraordner“: eigene Ordner pro Kamera übernehmen, darin nur Hochkant/Quer
+    @Published var ownCameraFolders: Bool { didSet { d.set(ownCameraFolders, forKey: "ownCameraFolders") } }
+    /// Beim Stabilisieren Seitenverhältnis beibehalten, wenn der Clip nicht 16:9 / 9:16 ist (z. B. DJI Avata 4:3)
+    @Published var gyroKeepAspect: Bool { didSet { d.set(gyroKeepAspect, forKey: "gyroKeepAspect") } }
+    /// Tagesordner: "ask" (nur fragen, wenn mehrere Tage), "top" (Tag über der Kamera), "under" (Tag unter der Kamera), "off"
+    @Published var dateMode: String { didSet { d.set(dateMode, forKey: "dateMode") } }
+    /// Datumsformat für Tagesordner (DateFormatter), Standard JJJJ-MM-TT
+    @Published var dateFormat: String { didSet { d.set(dateFormat, forKey: "dateFormat") } }
+    /// Aufnahmen zwischen 0 und 4 Uhr zählen zum Vortag
+    @Published var nightToPrevDay: Bool { didSet { d.set(nightToPrevDay, forKey: "nightToPrevDay") } }
+    /// Dreh-Ordner umbenennen (Datum in den Namen): "ask", "off" oder "front-range", "front-start", "back-range", "back-start"
+    @Published var renameMode: String { didSet { d.set(renameMode, forKey: "renameMode") } }
+
+    /// Steht schon ein Datum im Namen? (2026-10-12, 12.10.2026, 20261012, 12.10., eigenes Format)
+    func hasDateInName(_ name: String) -> Bool {
+        let pats = [#"(19|20)\d{2}-\d{1,2}-\d{1,2}"#, #"(^|[^\d])\d{1,2}\.\d{1,2}\.(\d{2,4})?"#, #"(^|[^\d])(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])($|[^\d])"#,
+                    #"(19|20)\d{2}_\d{2}_\d{2}"#]
+        if pats.contains(where: { name.range(of: $0, options: .regularExpression) != nil }) { return true }
+        return name.components(separatedBy: " ").contains { isDayFolder($0) }
+    }
+
+    /// Datumsteil für den Ordnernamen: Start oder Bereich (2026-10-12–15)
+    func dateLabel(from a: Date, to b: Date, range: Bool) -> String {
+        let s = dayString(a), e = dayString(b)
+        guard range, s != e else { return s }
+        let fmt = dateFormat.trimmingCharacters(in: .whitespaces)
+        let cal = Calendar.current
+        let da = nightToPrevDay ? a.addingTimeInterval(-4 * 3600) : a, db = nightToPrevDay ? b.addingTimeInterval(-4 * 3600) : b
+        if (fmt.isEmpty || fmt == "yyyy-MM-dd") && cal.component(.year, from: da) == cal.component(.year, from: db)
+            && cal.component(.month, from: da) == cal.component(.month, from: db) {
+            return s + "–" + String(format: "%02ld", cal.component(.day, from: db))
+        }
+        return s + "–" + e
+    }
+
+    private func dayFormatter() -> DateFormatter {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = .current
+        let fmt = dateFormat.trimmingCharacters(in: .whitespaces)
+        f.dateFormat = fmt.isEmpty ? "yyyy-MM-dd" : fmt
+        return f
+    }
+    /// Ordnername für den Aufnahmetag
+    func dayString(_ date: Date) -> String {
+        let d = nightToPrevDay ? date.addingTimeInterval(-4 * 3600) : date
+        return dayFormatter().string(from: d).replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+    }
+    /// Ist dieser Ordnername ein Tagesordner im eingestellten Format (oder JJJJ-MM-TT)?
+    func isDayFolder(_ name: String) -> Bool {
+        let first = name.components(separatedBy: FolderNames.separator).first ?? name
+        if first.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil { return true }
+        let f = dayFormatter()
+        guard let dt = f.date(from: first) else { return false }
+        return dayFormatterString(f, dt) == first
+    }
+    private func dayFormatterString(_ f: DateFormatter, _ d: Date) -> String {
+        f.string(from: d).replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+    }
     static let allLevels: [(id: String, name: String, icon: String)] = [
         ("scene", "Szene (zusammenhängende Drehzeit)", "film.stack"),
         ("camera", "Kamera", "camera.fill"),
@@ -80,6 +138,7 @@ final class LearnedStore: ObservableObject {
         ("length", "Länge (Einblendung / Hauptspur)", "timer"),
         ("orientation", "Hochkant / Quer", "rectangle.portrait.on.rectangle.portrait"),
         ("speed", "Drohne: Stand / Fahrt", "airplane"),
+        ("date", "Aufnahmetag (Tagesordner)", "calendar"),
     ]
     @Published var sceneGapMinutes: Double { didSet { d.set(sceneGapMinutes, forKey: "sceneGapMinutes") } }
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
@@ -114,6 +173,12 @@ final class LearnedStore: ObservableObject {
             if d.bool(forKey: "droneBySpeed") { l.append("speed") }
             levels = l
         }
+        ownCameraFolders = d.object(forKey: "ownCameraFolders") as? Bool ?? false
+        gyroKeepAspect = d.object(forKey: "gyroKeepAspect") as? Bool ?? true
+        dateMode = d.string(forKey: "dateMode") ?? "ask"
+        dateFormat = d.string(forKey: "dateFormat") ?? "yyyy-MM-dd"
+        nightToPrevDay = d.object(forKey: "nightToPrevDay") as? Bool ?? false
+        renameMode = d.string(forKey: "renameMode") ?? "ask"
         specialFolders = d.stringArray(forKey: "specialFolders") ?? ["Finale Videos", "Soundeffekte", "Bildschirmaufnahmen"]
         compactLayout = d.object(forKey: "compactLayout") as? Bool ?? true
         enableTagging = d.object(forKey: "enableTagging") as? Bool ?? false

@@ -33,6 +33,8 @@ struct E2E {
         store.sortByLens = false
         store.droneBySpeed = true
         store.compactLayout = false
+        store.ownCameraFolders = false
+        store.dateMode = "off"; store.renameMode = "off"   // Rückfragen nur im eigenen Test
         let sorter = Sorter(store: store)
         let gyro = GyroRunner(store: store, sorter: sorter)
         let tagger = TagRunner()
@@ -479,6 +481,95 @@ struct E2E {
                 try? fmx.copyItem(at: o, to: outDir.appendingPathComponent("beispiel-beste-momente.fcpxml"))
             }
             selM.close()
+        }
+
+        // 6k) Modus „Meine Kameraordner“: eigene Ordner = Kamera, darin nur Hochkant/Quer/Quadratisch
+        do {
+            let fmx = FileManager.default
+            check(FolderNames.orientation(width: 3840, height: 3840) == "Quadratisch" && FolderNames.orientation(width: 1000, height: 1090) == "Quadratisch",
+                  "1:1 (Osmo Action 6, 3840×3840) und fast quadratisch → Quadratisch")
+            check(FolderNames.orientation(width: 3840, height: 2880) == "Quer" && FolderNames.orientation(width: 2880, height: 3840) == "Hochkant"
+                  && FolderNames.orientation(width: 1000, height: 1120) == "Hochkant", "4:3 = Quer, 3:4 = Hochkant, Grenze 1,1")
+            check(store.hasDateInName("2026-10-12 Pitbike") && store.hasDateInName("Pitbike 12.10.2026") && store.hasDateInName("20261012_Pitbike")
+                  && store.hasDateInName("Pitbike 12.10.") && !store.hasDateInName("Pitbike") && !store.hasDateInName("A1"), "Datum im Ordnernamen wird erkannt")
+            let dreh = root.deletingLastPathComponent().appendingPathComponent("Pitbike Ä 🏍")
+            try? fmx.removeItem(at: dreh)
+            let quer = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")
+            let hoch = root.appendingPathComponent("Videos/Sony ZV-E1/Hochkant/C0002.MP4")
+            let clip = dreh.appendingPathComponent("A1/PRIVATE/M4ROOT/CLIP")
+            let dji = dreh.appendingPathComponent("Avata/DCIM/100MEDIA")
+            try? fmx.createDirectory(at: clip, withIntermediateDirectories: true)
+            try? fmx.createDirectory(at: dji, withIntermediateDirectories: true)
+            try? fmx.createDirectory(at: dreh.appendingPathComponent("Avata/hochkant"), withIntermediateDirectories: true)   // klein geschrieben vorhanden
+            try? fmx.copyItem(at: quer, to: clip.appendingPathComponent("C0101.MP4"))
+            try? "<NonRealTimeMeta><Device manufacturer=\"Sony\" modelName=\"ILCE-1\"/></NonRealTimeMeta>".write(to: clip.appendingPathComponent("C0101M01.XML"), atomically: true, encoding: .utf8)
+            try? fmx.copyItem(at: hoch, to: dji.appendingPathComponent("DJI_0001.MP4"))
+            let sq = root.deletingLastPathComponent().appendingPathComponent("CamSort-Extra/Q0001.MP4")
+            let hasSquare = fmx.fileExists(atPath: sq.path)
+            if hasSquare { try? fmx.copyItem(at: sq, to: dji.appendingPathComponent("Q0001.MP4")) }
+            try? fmx.copyItem(at: quer, to: dreh.appendingPathComponent("lose.MP4"))
+            try? Data().write(to: dreh.appendingPathComponent("A1/leer.MP4"))   // 0 Byte → nicht verschieben
+
+            store.ownCameraFolders = true; store.includeSubfolders = true; store.dateMode = "off"; store.renameMode = "off"
+            var askedCamera = false
+            func runOwn(answer: String? = nil, rename: String? = nil) async {
+                sorter.reset(); sorter.addFolders([dreh]); sorter.start()
+                let t0 = Date()
+                while sorter.phase != .done && sorter.phase != .cancelled && Date().timeIntervalSince(t0) < 120 {
+                    if let r = sorter.pendingCamera { askedCamera = true; sorter.answerCamera(r.suggestion, remember: false) }
+                    if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                    if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                    if let q = sorter.pendingQuestion {
+                        let id = q.options.contains { $0.id == answer } ? answer : (q.options.contains { $0.id == rename } ? rename : "off")
+                        if q.title.contains("Datum sortieren") { render(QuestionSheet(request: q), "19-rueckfrage-datum", w: 440, h: 360, sheet: true) }
+                        sorter.answerQuestion(id ?? "off", remember: false)
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            await runOwn()
+            func ex(_ p: String) -> Bool { fmx.fileExists(atPath: dreh.appendingPathComponent(p).path) }
+            let tree = ((try? fmx.subpathsOfDirectory(atPath: dreh.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            report.append("ℹ️ Meine Kameraordner: " + tree.joined(separator: " | "))
+            check(sorter.phase == .done, "Meine Kameraordner: Lauf endet sauber")
+            check(!askedCamera, "Meine Kameraordner: keine Kamera-Rückfrage")
+            check(ex("A1/Quer/C0101.MP4"), "Kartenstruktur PRIVATE/M4ROOT/CLIP → A1/Quer")
+            check(ex("A1/Begleitdateien/C0101M01.XML"), "Sony-XML → A1/Begleitdateien")
+            check(GyroRunner.isSony(dreh.appendingPathComponent("A1/Quer/C0101.MP4")), "Gyroflow findet die Sony-XML im neuen Layout")
+            let avataKids = ((try? fmx.contentsOfDirectory(atPath: dreh.appendingPathComponent("Avata").path)) ?? []).filter { $0.lowercased() == "hochkant" || $0.lowercased().hasPrefix("hochkant ") }
+            check(avataKids.count == 1 && fmx.fileExists(atPath: dreh.appendingPathComponent("Avata/\(avataKids.first ?? "")/DJI_0001.MP4").path),
+                  "DCIM/100MEDIA → Avata/Hochkant, vorhandenes „hochkant“ wiederverwendet (\(avataKids))")
+            if hasSquare { check(ex("Avata/Quadratisch/Q0001.MP4"), "1:1-Clip → Avata/Quadratisch") }
+            check(ex("lose.MP4") && sorter.hints.contains { $0.contains("außerhalb eines Kameraordners") }, "Lose Datei im Dreh-Ordner bleibt liegen und wird gemeldet")
+            check(ex("A1/leer.MP4") && sorter.problems.contains { $0.contains("leer.MP4") }, "0-Byte-Datei bleibt liegen und wird gemeldet")
+            check(!ex("A1/PRIVATE") && !ex("Avata/DCIM"), "Leere Kartenordner entfernt")
+            check(sorter.folderStats.count == 2 && sorter.movedVideos >= 2, "Ergebnis je Kameraordner (\(sorter.folderStats.map { "\($0.name) H\($0.hochkant) Q\($0.quer) □\($0.quadrat)" }))")
+            render(DoneView(), "20-fertig-kameraordner")
+
+            // zweiter Lauf: nichts darf sich ändern
+            await runOwn()
+            let tree2 = ((try? fmx.subpathsOfDirectory(atPath: dreh.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            check(tree == tree2, "Meine Kameraordner: zweiter Lauf verändert nichts")
+            check(sorter.hints.contains { $0.contains("unverändert: A1") || $0.contains("unverändert: Avata") }, "Zweiter Lauf meldet „unverändert“")
+
+            // neuer Kameraordner E1 mit Clips von zwei Tagen → Datumsfrage, Tagesordner unter der Kamera; dann Ordner umbenennen
+            let e1 = dreh.appendingPathComponent("E1")
+            try? fmx.createDirectory(at: e1, withIntermediateDirectories: true)
+            try? fmx.copyItem(at: quer, to: e1.appendingPathComponent("C0201.MP4"))
+            try? fmx.copyItem(at: quer, to: e1.appendingPathComponent("C0202.MP4"))
+            let d1 = Date(timeIntervalSince1970: 1_791_800_000), d2 = d1.addingTimeInterval(2 * 86400)
+            try? fmx.setAttributes([.modificationDate: d1], ofItemAtPath: e1.appendingPathComponent("C0201.MP4").path)
+            try? fmx.setAttributes([.modificationDate: d2], ofItemAtPath: e1.appendingPathComponent("C0202.MP4").path)
+            store.dateMode = "ask"; store.renameMode = "ask"
+            await runOwn(answer: "under", rename: "front-start")
+            let e1Kids = ((try? fmx.contentsOfDirectory(atPath: sorter.folders.first?.appendingPathComponent("E1").path ?? "")) ?? []).filter { store.isDayFolder($0) }
+            check(e1Kids.count == 2, "Zwei Aufnahmetage → E1/<Tag>/Quer (\(e1Kids))")
+            check(sorter.hints.contains { $0.contains("Neu sortiert: E1") && $0.contains("unverändert") }, "Ergebnis: „Neu sortiert: E1 – unverändert: …“")
+            let renamed = sorter.folders.first ?? dreh
+            check(renamed.lastPathComponent.hasSuffix("Pitbike Ä 🏍") && store.hasDateInName(renamed.lastPathComponent) && fmx.fileExists(atPath: renamed.path),
+                  "Dreh-Ordner umbenannt → „\(renamed.lastPathComponent)“, Pfade nachgezogen")
+            check(sorter.gyroOffer.allSatisfy { fmx.fileExists(atPath: $0.path) }, "Gyro-Angebot zeigt nach dem Umbenennen auf echte Dateien")
+            store.ownCameraFolders = false; store.dateMode = "off"; store.renameMode = "off"
         }
 
         // 7) Weitere Ansichten

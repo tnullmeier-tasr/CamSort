@@ -144,6 +144,11 @@ struct ContentView: View {
                 ExtensionSheet(request: req).environmentObject(sorter)
             }
         )
+        .background(
+            Color.clear.sheet(item: $sorter.pendingQuestion) { req in
+                QuestionSheet(request: req).environmentObject(sorter)
+            }
+        )
     }
 }
 
@@ -217,6 +222,9 @@ struct IdleView: View {
         var p: [String] = []
         p.append(store.includeSubfolders ? "mit Unterordnern" : "ohne Unterordner")
         if store.confirmCameras { p.append("Kameras nachfragen") }
+        if store.ownCameraFolders {
+            return "Modus: Meine Kameraordner (nur Hochkant / Quer) · " + (store.includeSubfolders ? "mit Unterordnern" : "ohne Unterordner")
+        }
         if store.compactLayout {
             let names = store.levels.compactMap { id in LearnedStore.allLevels.first { $0.id == id }?.name.components(separatedBy: " (").first }
             p.append("Ordner: " + (names.isEmpty ? "alles in Videos" : names.joined(separator: store.nestLevels ? " › " : " + ")))
@@ -282,6 +290,20 @@ struct IdleView: View {
                 .frame(maxHeight: 140)
             }
 
+            HStack(spacing: 8) {
+                Toggle(isOn: $store.ownCameraFolders) {
+                    Label(store.ownCameraFolders ? "Meine Kameraordner: an – nur Hochkant / Quer" : "Meine Kameraordner: aus – Kamera wird erkannt",
+                          systemImage: store.ownCameraFolders ? "folder.fill.badge.person.crop" : "camera.viewfinder")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .toggleStyle(.switch).controlSize(.small)
+                Spacer()
+                HelpButton(title: "Meine Kameraordner",
+                           text: "An: Du hast selbst Ordner pro Kamera angelegt (A1, Mini-Drohne, Avata …). CamSort übernimmt sie als Kamera und sortiert darin nur nach Hochkant/Quer. Wähle den Dreh-Ordner oder direkt einen Kameraordner.\nAus: CamSort erkennt die Kamera selbst.")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .glassBackground(12)
+
             Button { showSettings = true } label: {
                 HStack {
                     Image(systemName: "gearshape.fill")
@@ -325,7 +347,8 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
 
-            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }) {
+            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) })
+                || (store.ownCameraFolders && !sorter.folders.isEmpty) {
                 HStack(spacing: 10) {
                     Button { timeline.open(folders: sorter.folders) } label: {
                         Label("Zeitleiste", systemImage: "clock.arrow.2.circlepath")
@@ -341,7 +364,8 @@ struct IdleView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
             }
             if (store.autoGyro || store.showGyroButton),
-               sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }) {
+               sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) })
+                || (store.ownCameraFolders && !sorter.folders.isEmpty) {
                 HStack(spacing: 8) {
                     Button { sorter.startGyro() } label: {
                         Label("Nur Gyroflow-Clips trennen", systemImage: "gyroscope")
@@ -430,6 +454,7 @@ struct CountGrid: View {
             ("Quer", "rectangle.fill", Theme.orange, sorter.counts["Quer"] ?? 0),
             ("Fotos", "photo.fill", Color(red: 0.6, green: 0.7, blue: 1), sorter.counts["Fotos"] ?? 0),
         ]
+        if let v = sorter.counts[FolderNames.square], v > 0 { r.append((FolderNames.square, "square.fill", Theme.mint, v)) }
         if let v = sorter.counts["Video"], v > 0 { r.append(("Video", "film", .white, v)) }
         let icons = ["Extras": "tray.full", "Begleitdateien": "doc.on.doc", "Stabilisiert": "gyroscope", "Original": "film", "Gyroflow-Projekte": "doc.badge.gearshape",
                      "XML": "doc.text.fill", "LRF": "film.fill", "SRT": "text.alignleft", "Musik": "music.note",
@@ -498,7 +523,23 @@ struct DoneView: View {
 
                     CountGrid(hideZeros: true)
 
-                    if !sorter.cameras.isEmpty {
+                    if !sorter.folderStats.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(sorter.folderStats) { st in
+                                HStack {
+                                    Image(systemName: st.moved > 0 ? "folder.fill.badge.plus" : "folder.fill").foregroundStyle(st.moved > 0 ? Theme.mint : .white.opacity(0.5))
+                                    Text(st.name).lineLimit(1).truncationMode(.middle)
+                                    Spacer()
+                                    if st.moved == 0 { Text("unverändert").foregroundStyle(.white.opacity(0.5)) }
+                                    else { Text("Hochkant \(st.hochkant) · Quer \(st.quer)" + (st.quadrat > 0 ? " · \(FolderNames.square) \(st.quadrat)" : "") + (st.other > 0 ? " · +\(st.other)" : "")) }
+                                }
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+                            }
+                        }
+                    }
+                    if !sorter.cameras.isEmpty && sorter.folderStats.isEmpty {
                         FlowChips(items: sorter.cameras.sorted { $0.value > $1.value }.map { ($0.key, $0.value) })
                     }
                     if !sorter.speeds.isEmpty {
@@ -519,6 +560,22 @@ struct DoneView: View {
                 .padding(.bottom, 6)
             }
 
+            if !cancelled && !sorter.gyroOffer.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(plural(sorter.gyroOffer.count, "Clip enthält", "Clips enthalten")) Gyrodaten (\(sorter.gyroOfferByCamera.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", "))) – jetzt in Gyroflow stabilisieren?")
+                        .font(.system(size: 12, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button { gyro.start(clips: sorter.gyroOffer, folders: sorter.folders) } label: {
+                            Label("Jetzt stabilisieren", systemImage: "gyroscope")
+                                .frame(maxWidth: .infinity).frame(height: 40)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.mint.opacity(0.35)))
+                        }.buttonStyle(.plain)
+                        HelpButton(title: "Gyrodaten erkannt", text: "CamSort hat in diesen Clips Bewegungsdaten gefunden, die Gyroflow lesen kann (Sony, DJI mit eingebetteten Gyrodaten wie Avata/Action, GoPro, Insta360). Schon stabilisierte Clips und Clips, zu denen es schon eine stabilisierte Fassung gibt, sind nicht dabei. Gyroflow rendert erst alle Hochkant-, dann alle Quer-Clips; die Ergebnisse landen neben dem Original und werden danach in „Stabilisiert“ / „Original“ getrennt. 4:3-Clips behalten auf Wunsch ihr Format (Einstellungen › Gyroflow).")
+                    }
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.mint.opacity(0.12)))
+            }
             if !cancelled && !sorter.fcpLibraries.isEmpty && sorter.movedVideos > 0 {
                 FCPRelinkCard(libraries: sorter.fcpLibraries)
             }
@@ -550,7 +607,7 @@ struct DoneView: View {
             if !cancelled && store.showGyroButton {
                 HStack(spacing: 8) {
                     Button { gyro.start(folders: sorter.folders) } label: {
-                        Label("Sony-Clips mit Gyroflow stabilisieren", systemImage: "gyroscope")
+                        Label("Clips mit Gyroflow stabilisieren", systemImage: "gyroscope")
                             .frame(maxWidth: .infinity).frame(height: 44)
                             .background(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.mint, lineWidth: 1.5))
                             .foregroundStyle(Theme.mint)
@@ -757,6 +814,50 @@ struct CameraSheet: View {
     }
 }
 
+// MARK: - Rückfrage vor dem Lauf
+
+struct QuestionSheet: View {
+    @EnvironmentObject var sorter: Sorter
+    let request: QuestionRequest
+    @State private var choice: String = ""
+    @State private var remember = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: request.icon).font(.system(size: 26)).foregroundStyle(.orange)
+                VStack(alignment: .leading) {
+                    Text(request.title).font(.headline)
+                    Text(request.message).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(request.options) { o in
+                    Button { choice = o.id } label: {
+                        HStack(alignment: .top) {
+                            Image(systemName: choice == o.id ? "largecircle.fill.circle" : "circle")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(o.label).font(.system(size: 13, weight: .semibold))
+                                Text(o.detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }.contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            }
+            Toggle("Antwort merken (in den Einstellungen änderbar)", isOn: $remember).font(.system(size: 12))
+            HStack {
+                Button("Abbrechen") { sorter.answerQuestion(nil, remember: false); sorter.cancel() }
+                Spacer()
+                Button("Weiter") { sorter.answerQuestion(choice.isEmpty ? (request.options.first?.id ?? "off") : choice, remember: remember) }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20).frame(width: 440)
+        .onAppear { if choice.isEmpty { choice = request.options.first?.id ?? "" } }
+    }
+}
+
 // MARK: - Unbekannte Dateitypen
 
 struct ExtensionSheet: View {
@@ -870,6 +971,28 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     section("Sortieren")
+                    WithHelp(title: "Meine Kameraordner", text: "Für deinen Ablauf: Du legst beim Heimkommen selbst einen Ordner pro Kamera an (z. B. „A1“, „Mini-Drohne“, „Avata“) und kopierst die Karten hinein.\n\nAn: CamSort übernimmt deine Ordner als Kamera – es erkennt, fragt und benennt keine Kamera. In jedem Kameraordner sortiert es nur nach Hochkant und Quer, auch aus Kartenstrukturen wie PRIVATE/M4ROOT/CLIP oder DCIM. Begleitdateien (XML, SRT, LRF …) kommen in „Begleitdateien“, Fotos in „Fotos“, Musik/ZIP/FCP in „Extras“ – alles innerhalb des Kameraordners.\n\nWähle den Dreh-Ordner mit den Kameraordnern oder direkt einen Kameraordner. Lose Dateien im Dreh-Ordner bleiben liegen. Mehrfaches Einlesen ist sicher: Fertig sortierte Kameraordner bleiben unverändert, nur Neues wird einsortiert.\n\nAus: CamSort erkennt die Kamera selbst (bisheriges Verhalten).") {
+                        Toggle("Meine Kameraordner (nur Hochkant / Quer)", isOn: $store.ownCameraFolders)
+                    }
+                    WithHelp(title: "Tagesordner", text: "Stammen die Clips von mehreren Tagen, kann CamSort zusätzlich nach Aufnahmetag ordnen – oben (Dreh/2026-10-12/A1/Hochkant) oder unter der Kamera (Dreh/A1/2026-10-12/Hochkant). „Fragen“: CamSort fragt nur, wenn wirklich mehrere Tage drin sind. Gibt es schon Tagesordner, wird die vorhandene Struktur ohne Frage weitergeführt.\n\nDas Datum kommt aus den Video-Metadaten (Aufnahmezeit), nicht aus dem Dateidatum.") {
+                        Picker("Tagesordner", selection: $store.dateMode) {
+                            Text("Fragen").tag("ask"); Text("Oben").tag("top"); Text("Unter der Kamera").tag("under"); Text("Nie").tag("off")
+                        }.frame(width: 300)
+                    }
+                    HStack {
+                        Text("Datumsformat").font(.system(size: 12))
+                        TextField("yyyy-MM-dd", text: $store.dateFormat).textFieldStyle(.roundedBorder).frame(width: 120)
+                        Text("→ \(store.dayString(Date()))").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                    }
+                    WithHelp(title: "Nach Mitternacht", text: "An: Aufnahmen zwischen 0 und 4 Uhr zählen zum Vortag – praktisch bei Abend-Events, die über Mitternacht gehen.") {
+                        Toggle("Aufnahmen bis 4 Uhr zählen zum Vortag", isOn: $store.nightToPrevDay)
+                    }
+                    WithHelp(title: "Datum im Ordnernamen", text: "Nach erfolgreichem Sortieren kann CamSort den eingeworfenen Ordner umbenennen, z. B. „Pitbike“ → „2026-10-12 Pitbike“ (frühestes Aufnahmedatum der Clips; bei mehreren Tagen auch als Zeitraum). Nur der Ordner wird umbenannt, keine Datei. Steht schon ein Datum im Namen, wird nicht gefragt. Gibt es den neuen Namen schon oder ist der Ordner gesperrt, bleibt alles wie es ist und CamSort meldet das.") {
+                        Picker("Datum im Namen", selection: $store.renameMode) {
+                            Text("Fragen").tag("ask"); Text("Vorne").tag("front-start"); Text("Vorne, Zeitraum").tag("front-range")
+                            Text("Hinten").tag("back-start"); Text("Hinten, Zeitraum").tag("back-range"); Text("Nie").tag("off")
+                        }.frame(width: 300)
+                    }
                     WithHelp(title: "Kompakte Ordner", text: "An (empfohlen): Alle Merkmale stehen in EINEM Ordnernamen statt in verschachtelten Ordnern – z. B. Videos/Sony Alpha 1 · FE 24-70 · Quer. So siehst du sofort, was drin ist, und bist mit einem Klick beim Clip. Neue Ordner entstehen nur, wenn es im Dreh wirklich etwas anderes gibt (zweite Kamera, Hochkant-Clips …). XML, LRF und SRT landen gemeinsam in „Begleitdateien“.\n\nEin Dreh ist jeder Ordner mit Clips – bei Kundenordnern also jeder Unterordner. Kartenordner wie DCIM oder PRIVATE zählen zum Dreh darüber.\n\nAus: ausführliche Struktur mit eigenem Ordner pro Ebene (Videos/Kamera/Quer).") {
                         Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
                     }
@@ -908,6 +1031,9 @@ struct SettingsView: View {
                     }
                     GyroPresetBox()
                     GyroNotifyBlock()
+                    WithHelp(title: "Seitenverhältnis beibehalten", text: "An (empfohlen): Clips, die nicht 16:9 bzw. 9:16 sind – z. B. die DJI Avata mit 4:3 –, werden von Gyroflow nur stabilisiert und behalten ihr Originalformat. CamSort gibt Gyroflow dafür die Bildgröße des Clips als Ausgabegröße mit (statt der Größe aus deinem Preset). Dein Preset selbst bleibt unverändert.\n\nAus: Alle Clips bekommen die Ausgabegröße aus dem Preset (z. B. 16:9) – 4:3-Clips werden dann beschnitten.") {
+                        Toggle("4:3-Clips (z. B. Avata) im Originalformat lassen", isOn: $store.gyroKeepAspect)
+                    }
                     WithHelp(title: "Gyroflow-App", text: "CamSort sucht Gyroflow automatisch im Programme-Ordner. Nur falls Gyroflow woanders liegt, hier die Gyroflow-App auswählen.") {
                         HStack {
                             Text(store.gyroAppPath.isEmpty ? "Gyroflow-App: automatisch (Programme-Ordner)" : "Gyroflow-App: " + (store.gyroAppPath as NSString).lastPathComponent)
@@ -1152,6 +1278,7 @@ struct FolderNamingEditor: View {
     @AppStorage("fnPhotos") private var photos = "Fotos"
     @AppStorage("fnSide") private var side = "Begleitdateien"
     @AppStorage("fnExtras") private var extras = "Extras"
+    @AppStorage("fnSquare") private var square = "Quadratisch"
     @AppStorage("fnSeparator") private var separator = " · "
     @AppStorage("fnShowCamera") private var showCamera = true
     @AppStorage("fnShowOrientation") private var showOrientation = true
@@ -1182,8 +1309,12 @@ struct FolderNamingEditor: View {
                     GridRow { Text("Fotos").font(.system(size: 11)); TextField("Fotos", text: $photos) }
                     GridRow { Text("Begleitdateien").font(.system(size: 11)); TextField("Begleitdateien", text: $side) }
                     GridRow { Text("Extras").font(.system(size: 11)); TextField("Extras", text: $extras) }
+                    GridRow { Text("Quadratisch").font(.system(size: 11)); TextField("Quadratisch", text: $square) }
                 }
                 .textFieldStyle(.roundedBorder).controlSize(.small)
+            }
+            WithHelp(title: "Quadratisch", text: "Quadratisch aufgenommen – daraus lassen sich Hochkant und Quer schneiden (z. B. DJI Osmo Action 6 mit 3840×3840). CamSort legt Clips mit einem Seitenverhältnis zwischen 0,9 und 1,1 in diesen Ordner. Ab 1,1 gilt: breiter = Quer (auch 4:3), höher = Hochkant (auch 3:4). Gyroflow lässt quadratische und 4:3-Clips im Originalformat, wenn das unter Gyroflow eingestellt ist.") {
+                Text("Ordner für 1:1-Clips").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             WithHelp(title: "Ordnername bei „Szene“", text: "Wie Szenen-Ordner heißen. Statt „Szene“ geht z. B. auch „Take“ oder „Einstellung“.") {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1224,6 +1355,7 @@ struct LevelBuilder: View {
         case "length": return s.lengthShort
         case "orientation": return "Quer"
         case "speed": return "Fahrt"
+        case "date": return s.dayString(Date())
         default: return id
         }
     }

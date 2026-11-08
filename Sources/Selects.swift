@@ -40,7 +40,9 @@ final class SelectsRunner: ObservableObject {
         var byDreh: [URL: [URL]] = [:]
         for f in folders {
             for u in Self.videos(in: f, suffixes: suffixes, preferStabilized: preferStabilized) {
-                byDreh[Sorter.drehRoot(u.deletingLastPathComponent()), default: []].append(u)
+                // „Meine Kameraordner“ (kein „Videos“ im Pfad): gewählter Ordner = Dreh
+                let own = !u.pathComponents.contains(where: FolderNames.isVideos)
+                byDreh[own ? f : Sorter.drehRoot(u.deletingLastPathComponent()), default: []].append(u)
             }
         }
         total = byDreh.values.reduce(0) { $0 + $1.count }
@@ -58,7 +60,7 @@ final class SelectsRunner: ObservableObject {
         var all: [URL] = []
         guard let en = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
         while let u = en.nextObject() as? URL {
-            if Sorter.videoExt.contains(u.pathExtension.lowercased()), u.pathComponents.contains(where: FolderNames.isVideos) { all.append(u) }
+            if Sorter.videoExt.contains(u.pathExtension.lowercased()), FolderNames.isSortedVideoPath(u.pathComponents) { all.append(u) }
         }
         func isStab(_ u: URL) -> Bool { let s = u.deletingPathExtension().lastPathComponent.lowercased(); return suffixes.contains { s.contains($0) } }
         let stab = all.filter(isStab)

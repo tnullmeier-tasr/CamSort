@@ -168,6 +168,10 @@ final class ClipBrowser: ObservableObject {
 
     func rotate(clockwise: Bool) {
         guard let s = selected else { return }
+        if GyroRunner.orientationSync(s.url) == FolderNames.square {
+            message = "\(s.url.lastPathComponent) ist quadratisch – Drehen ändert am Format nichts. Hochkant oder Quer schneidest du später im Schnitt aus dem Quadrat."
+            return
+        }
         player.replaceCurrentItem(with: nil)
         do {
             try LosslessRotate.rotate(s.url, clockwise: clockwise)

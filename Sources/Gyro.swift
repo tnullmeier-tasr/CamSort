@@ -55,10 +55,13 @@ final class GyroRunner: ObservableObject {
 
     // MARK: Sony-Clips sammeln
 
-    /// Unstabilisierte Sony-Videos in Hochkant/Quer-Ordnern – erst alle Hochkant, dann alle Quer.
+    /// Unstabilisierte Clips mit Gyrodaten (Sony, DJI, GoPro, Insta360) in Hochkant/Quer-Ordnern – erst alle Hochkant, dann alle Quer.
     func collectSonyClips(in folders: [URL]) -> (hochkant: [URL], quer: [URL]) {
+        Self.collectGyroClips(in: folders, suffixes: store.gyroSuffixList)
+    }
+
+    nonisolated static func collectGyroClips(in folders: [URL], suffixes: [String]) -> (hochkant: [URL], quer: [URL]) {
         let fm = FileManager.default
-        let suffixes = store.gyroSuffixList
         var h: [URL] = [], q: [URL] = []
         for base in folders {
             guard let en = fm.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
@@ -70,47 +73,85 @@ final class GyroRunner: ObservableObject {
                     continue
                 }
                 guard Sorter.videoExt.contains(u.pathExtension.lowercased()) else { continue }
-                let stem = u.deletingPathExtension().lastPathComponent.lowercased()
-                if suffixes.contains(where: { stem.contains($0) }) { continue }       // schon stabilisiert
-                let comps = u.pathComponents
-                guard comps.contains(where: FolderNames.isVideos) else { continue }
-                let group = comps.contains("Hochkant") || comps.last(where: { $0.contains("Hochkant") }) != nil ? "Hochkant"
-                          : comps.contains("Quer") || comps.last(where: { $0.contains("Quer") }) != nil ? "Quer"
-                          : Self.orientationSync(u)
-                guard hasStabilizedSibling(u, suffixes: suffixes) == false else { continue }
-                guard Self.isSony(u) else { continue }
-                if group == "Hochkant" { h.append(u) } else { q.append(u) }
+                if let g = classify(u, suffixes: suffixes) {
+                    if g == FolderNames.portrait { h.append(u) } else { q.append(u) }
+                }
             }
         }
         return (h.sorted { $0.path < $1.path }, q.sorted { $0.path < $1.path })
     }
 
+    /// Ausrichtung des Clips, wenn er sortiert, unstabilisiert und Gyroflow-tauglich ist – sonst nil.
+    nonisolated static func classify(_ u: URL, suffixes: [String]) -> String? {
+        let stem = u.deletingPathExtension().lastPathComponent.lowercased()
+        if suffixes.contains(where: { stem.contains($0) }) { return nil }       // schon stabilisiert
+        let comps = u.pathComponents
+        guard FolderNames.isSortedVideoPath(comps) else { return nil }
+        let dirs = comps.dropLast()
+        let group = dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.portrait) }) || dirs.last(where: { $0.contains("Hochkant") }) != nil ? FolderNames.portrait
+                  : dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.landscape) }) || dirs.last(where: { $0.contains("Quer") }) != nil ? FolderNames.landscape
+                  : orientationSync(u)
+        guard !hasStabilizedSibling(u, suffixes: suffixes) else { return nil }
+        guard gyroSource(u) != nil else { return nil }
+        return group
+    }
+
     /// Hochkant/Quer direkt aus dem Video (wenn der Ordnername es nicht verrät)
-    static func orientationSync(_ u: URL) -> String {
+    nonisolated static func orientationSync(_ u: URL) -> String {
         let a = AVURLAsset(url: u)
         guard let t = a.tracks(withMediaType: .video).first else { return "Quer" }
         let r = t.naturalSize.applying(t.preferredTransform)
-        return abs(r.height) > abs(r.width) ? "Hochkant" : "Quer"
+        return FolderNames.orientation(width: Double(abs(r.width)), height: Double(abs(r.height))) ?? "Quer"
     }
 
-    private func hasStabilizedSibling(_ u: URL, suffixes: [String]) -> Bool {
+    nonisolated static func hasStabilizedSibling(_ u: URL, suffixes: [String]) -> Bool {
         let dir = u.deletingLastPathComponent()
         let stem = u.deletingPathExtension().lastPathComponent.lowercased()
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return names.contains { n in
+        if names.contains(where: { n in
             let s = (n as NSString).deletingPathExtension.lowercased()
             return s != stem && s.hasPrefix(stem) && suffixes.contains { s.contains($0) }
+        }) { return true }
+        // schon getrennt: Original liegt in „Original“, Stabilisiert daneben
+        if dir.lastPathComponent == "Original" { return true }
+        return false
+    }
+
+    /// Hat der Clip Bewegungsdaten, die Gyroflow lesen kann? Erkennung wie telemetry-parser (Gyroflow):
+    /// Sony = XML mit manufacturer="Sony" (Begleitdatei oder eingebettet), DJI = "djmd" + "DJI meta",
+    /// GoPro = "GPMFDEVC" bzw. "GoPro MET", Insta360 = Magic am Dateiende. Unsicher → nil (nicht anbieten).
+    nonisolated static func gyroSource(_ url: URL) -> String? {
+        if isSony(url) { return "Sony" }
+        let data = headTail(url)
+        func has(_ s: String) -> Bool { data.range(of: Data(s.utf8)) != nil }
+        if has("djmd") && has("DJI meta") { return "DJI" }
+        if has("GPMFDEVC") || has("GoPro MET") { return "GoPro" }
+        let magic = Data("8db42d694ccc418790edff439fe026bf".utf8)
+        if data.count > magic.count && data.suffix(magic.count) == magic { return "Insta360" }
+        return nil
+    }
+
+    nonisolated static func headTail(_ url: URL) -> Data {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return Data() }
+        defer { try? h.close() }
+        let chunk = 2 * 1_048_576
+        var data = (try? h.read(upToCount: chunk)) ?? Data()
+        if let size = try? h.seekToEnd(), size > UInt64(chunk) {
+            try? h.seek(toOffset: size - UInt64(chunk))
+            data.append((try? h.read(upToCount: chunk)) ?? Data())
         }
+        return data
     }
 
     /// Sony erkennt man am eingebetteten XML in der MP4 (unabhängig vom Ordnernamen).
-    static func isSony(_ url: URL) -> Bool {
-        // a) Begleit-XML: liegt nach dem Sortieren in einem „XML“-Ordner weiter oben
+    nonisolated static func isSony(_ url: URL) -> Bool {
+        // a) Begleit-XML: liegt nach dem Sortieren in „XML“ bzw. „Begleitdateien“ weiter oben
         let stem = url.deletingPathExtension().lastPathComponent
         var dir = url.deletingLastPathComponent()
+        let sideDirs = Array(Set(["XML", "Begleitdateien", FolderNames.side]))
         for _ in 0..<8 {
             for name in [stem + "M01.XML", stem + "M01.xml"] {
-                for cand in [dir.appendingPathComponent("XML").appendingPathComponent(name), dir.appendingPathComponent(name)] {
+                for cand in sideDirs.map({ dir.appendingPathComponent($0).appendingPathComponent(name) }) + [dir.appendingPathComponent(name)] {
                     if let s = try? String(contentsOf: cand, encoding: .utf8),
                        s.range(of: "manufacturer=\"Sony\"", options: .caseInsensitive) != nil { return true }
                 }
@@ -123,7 +164,7 @@ final class GyroRunner: ObservableObject {
         return isSonyEmbedded(url)
     }
 
-    static func isSonyEmbedded(_ url: URL) -> Bool {
+    nonisolated static func isSonyEmbedded(_ url: URL) -> Bool {
         guard let h = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? h.close() }
         var data = (try? h.read(upToCount: 1_048_576)) ?? Data()
@@ -136,7 +177,12 @@ final class GyroRunner: ObservableObject {
 
     // MARK: Ablauf
 
-    func start(folders: [URL]) {
+    func start(folders: [URL]) { start(folders: folders, clips: nil) }
+
+    /// Mit fester Liste (z. B. aus dem Fertig-Bildschirm „X Clips enthalten Gyrodaten“)
+    func start(clips list: [URL], folders: [URL]) { start(folders: folders, clips: list) }
+
+    private func start(folders: [URL], clips list: [URL]?) {
         errors = []; done = []; cancelled = false; pauseRequested = false
         guard let app = appURL, let exe = executable(in: app) else {
             state = .failed("Gyroflow wurde nicht gefunden. Bitte unter Einstellungen › Gyroflow die Gyroflow-App auswählen.")
@@ -152,16 +198,41 @@ final class GyroRunner: ObservableObject {
             state = .failed("Das Preset „\((preset as NSString).lastPathComponent)“ ist nicht lesbar (\(preset)). Bitte unter Einstellungen › Gyroflow einmal neu wählen – CamSort speichert sich dann eine eigene Kopie.")
             return
         }
-        let clips = collectSonyClips(in: folders)
+        var clips: (hochkant: [URL], quer: [URL]) = ([], [])
+        if list == nil { clips = collectSonyClips(in: folders) }
+        if let list {
+            let fm = FileManager.default
+            let keep = list.filter { fm.fileExists(atPath: $0.path) }
+            let h = keep.filter { Self.isPortraitFolder($0) }.sorted { $0.path < $1.path }
+            let q = keep.filter { !Self.isPortraitFolder($0) }.sorted { $0.path < $1.path }
+            clips = (h, q)
+        }
         queue = clips.hochkant + clips.quer
         guard !queue.isEmpty else {
-            state = .failed("Keine unstabilisierten Sony-Clips gefunden. Entweder sind schon alle stabilisiert, oder der Ordner wurde noch nicht sortiert.")
+            state = .failed("Keine unstabilisierten Clips mit Gyrodaten gefunden. Entweder sind schon alle stabilisiert, oder der Ordner wurde noch nicht sortiert.")
             return
         }
         index = 0
         state = .running
         eta.begin()
         Task { await runAll(exe: exe, preset: preset, hochkantCount: clips.hochkant.count, folders: folders) }
+    }
+
+    nonisolated static func isPortraitFolder(_ u: URL) -> Bool {
+        let dirs = u.pathComponents.dropLast()
+        if dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.portrait) || $0.contains("Hochkant") }) { return true }
+        if dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.landscape) || $0.contains("Quer") }) { return false }
+        return orientationSync(u) == FolderNames.portrait
+    }
+
+    /// Kodierte Bildgröße, wenn sie nicht 16:9 bzw. 9:16 ist (z. B. 4:3 der DJI Avata) – sonst nil.
+    nonisolated static func nonWideSize(_ u: URL) -> (w: Int, h: Int)? {
+        let a = AVURLAsset(url: u)
+        guard let t = a.tracks(withMediaType: .video).first else { return nil }
+        let w = Int(abs(t.naturalSize.width).rounded()), h = Int(abs(t.naturalSize.height).rounded())
+        guard w > 0, h > 0 else { return nil }
+        let r = Double(max(w, h)) / Double(min(w, h))
+        return abs(r - 16.0 / 9.0) < 0.03 ? nil : (w, h)
     }
 
     private func runAll(exe: URL, preset: String, hochkantCount: Int, folders: [URL]) async {
@@ -189,7 +260,7 @@ final class GyroRunner: ObservableObject {
         if !done.isEmpty, let sorter {
             sorter.folders = folders
             sorter.startGyro()
-            sorter.hints.append("Gyroflow: \(done.count) von \(queue.count) Sony-Clips stabilisiert")
+            sorter.hints.append("Gyroflow: \(done.count) von \(queue.count) Clips stabilisiert")
             sorter.problems.append(contentsOf: errors)
             state = .idle
         } else {
@@ -201,7 +272,13 @@ final class GyroRunner: ObservableObject {
         let suffix = store.gyroSuffixList.first ?? "_stabilized"
         let p = Process()
         p.executableURL = exe
-        p.arguments = [clip.path, "--preset", preset, "-t", suffix, "-f", "--stdout-progress"]
+        var args = [clip.path, "--preset", preset, "-t", suffix, "-f", "--stdout-progress"]
+        // Seitenverhältnis beibehalten (z. B. Avata 4:3): Ausgabegröße = Quellgröße statt Preset-Größe.
+        // Gyroflow-CLI: -p/--out-params "{ 'output_width': W, 'output_height': H }" (docs.gyroflow.xyz › Command line)
+        if store.gyroKeepAspect, let sz = Self.nonWideSize(clip) {
+            args += ["-p", "{ 'output_width': \(sz.w), 'output_height': \(sz.h) }"]
+        }
+        p.arguments = args
         p.standardInput = FileHandle.nullDevice   // keine Rückfragen – nichts kann auf Eingabe warten
         let pipe = Pipe()
         p.standardOutput = pipe
