@@ -888,9 +888,9 @@ final class Sorter: ObservableObject {
     /// Ausrichtung und nominale Bildrate in EINEM Ladevorgang der Videospur (keine doppelte Analyse pro Datei)
     private func videoProps(of asset: AVURLAsset) async -> (orient: String?, nominalFps: Double) {
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-              let (size, transform, rate) = try? await track.load(.naturalSize, .preferredTransform, .nominalFrameRate) else { return (nil, 0) }
-        let r = size.applying(transform)
-        return (FolderNames.orientation(width: Double(abs(r.width)), height: Double(abs(r.height))), Double(rate))
+              let props = try? await track.load(.naturalSize, .preferredTransform, .nominalFrameRate) else { return (nil, 0) }
+        let r = props.0.applying(props.1)
+        return (FolderNames.orientation(width: Double(abs(r.width)), height: Double(abs(r.height))), Double(props.2))
     }
 
     // MARK: Bildrate
