@@ -1445,7 +1445,7 @@ extension Sorter {
         let suffixes = store.gyroSuffixList
         let bases = folders
         let offer: [URL] = await Task.detached(priority: .userInitiated) {
-            let r = GyroRunner.collectGyroClips(in: bases, suffixes: suffixes)
+            let r = await GyroRunner.collectGyroClips(in: bases, suffixes: suffixes)
             return r.hochkant + r.quer
         }.value
         stepLabel = ""

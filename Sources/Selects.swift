@@ -81,7 +81,7 @@ final class SelectsRunner: ObservableObject {
                 if cancelled { state = .idle; return }
                 currentFile = c.lastPathComponent
                 let seg = segmentLength
-                let w = await Task.detached(priority: .userInitiated) { Self.analyze(c, segment: seg) }.value
+                let w = await Task.detached(priority: .userInitiated) { await Self.analyze(c, segment: seg) }.value
                 if w.isEmpty { errors.append("\(c.lastPathComponent): nicht lesbar – übersprungen") }
                 analyzedSeconds += w.last?.end ?? 0
                 raw.append((c, w))
@@ -114,7 +114,7 @@ final class SelectsRunner: ObservableObject {
                 let name = dreh.lastPathComponent
                 let out = dreh.appendingPathComponent("\(name) – Beste Momente.fcpxml")
                 do {
-                    try FCPXML.write(segments: chosen, eventName: "CamSort – \(name)", projectName: "Beste Momente", to: out)
+                    try await FCPXML.write(segments: chosen, eventName: "CamSort – \(name)", projectName: "Beste Momente", to: out)
                     outputs.append(out)
                 } catch { errors.append("FCPXML für \(name) konnte nicht geschrieben werden: \(error.localizedDescription)") }
             }
@@ -127,9 +127,12 @@ final class SelectsRunner: ObservableObject {
 
     struct Window { let start: Double; let end: Double; let sharpness: Double; let exposure: Double; let calm: Double }
 
-    nonisolated static func analyze(_ url: URL, segment: Double) -> [Window] {
+    nonisolated static func analyze(_ url: URL, segment: Double) async -> [Window] {
         let asset = AVURLAsset(url: url)
-        guard let track = asset.tracks(withMediaType: .video).first, let reader = try? AVAssetReader(asset: asset) else { return [] }
+        guard let found = try? await asset.loadTracks(withMediaType: .video), let track = found.first,
+              let reader = try? AVAssetReader(asset: asset) else { return [] }
+        let nominalFPS = (try? await track.load(.nominalFrameRate)) ?? 0
+        let assetDuration = (try? await asset.load(.duration))?.seconds ?? 0
         let W = 160, H = 90
         let out = AVAssetReaderTrackOutput(track: track, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -139,7 +142,7 @@ final class SelectsRunner: ObservableObject {
         guard reader.canAdd(out) else { return [] }
         reader.add(out)
         guard reader.startReading() else { return [] }
-        let fps = Double(track.nominalFrameRate > 0 ? track.nominalFrameRate : 25)
+        let fps = Double(nominalFPS > 0 ? nominalFPS : 25)
         let step = max(1, Int((fps / 4).rounded()))      // ~4 Bilder pro Sekunde auswerten
         var frame = 0
         var prev: [Float]? = nil
@@ -183,7 +186,7 @@ final class SelectsRunner: ObservableObject {
             samples.append((t, sharp, expo, calm))
         }
         guard reader.status == .completed || reader.status == .reading, !samples.isEmpty else { return [] }
-        let dur = max(asset.duration.seconds, samples.last!.t + 0.25)
+        let dur = max(assetDuration, samples.last!.t + 0.25)
         var wins: [Window] = []
         var s = 0.0
         while s < dur - 0.5 {
@@ -223,8 +226,8 @@ enum FCPXML {
     }
 
     /// Startzeitcode der Datei (Sony & Co. schreiben einen), damit Final Cut die richtigen Stellen trifft
-    static func timecodeStart(_ asset: AVURLAsset, rate r: Rate) -> Int {
-        guard let tc = asset.tracks(withMediaType: .timecode).first, let reader = try? AVAssetReader(asset: asset) else { return 0 }
+    static func timecodeStart(_ asset: AVURLAsset, rate r: Rate) async -> Int {
+        guard let tcs = try? await asset.loadTracks(withMediaType: .timecode), let tc = tcs.first, let reader = try? AVAssetReader(asset: asset) else { return 0 }
         let out = AVAssetReaderTrackOutput(track: tc, outputSettings: nil)
         guard reader.canAdd(out) else { return 0 }
         reader.add(out); reader.startReading()
@@ -235,16 +238,17 @@ enum FCPXML {
         return Int(UInt32(bigEndian: v))
     }
 
-    static func write(segments: [SelectsRunner.Segment], eventName: String, projectName: String, to out: URL) throws {
+    static func write(segments: [SelectsRunner.Segment], eventName: String, projectName: String, to out: URL) async throws {
         var formats: [String: (id: String, r: Rate, w: Int, h: Int)] = [:]
         var assets: [URL: (id: String, fmt: String, r: Rate, start: Int, dur: Int, audio: Bool)] = [:]
         var res = ""
         var n = 1
         for s in segments where assets[s.url] == nil {
             let a = AVURLAsset(url: s.url)
-            guard let vt = a.tracks(withMediaType: .video).first else { continue }
-            let r = rate(vt.nominalFrameRate)
-            let sz = vt.naturalSize.applying(vt.preferredTransform)
+            guard let vts = try? await a.loadTracks(withMediaType: .video), let vt = vts.first,
+                  let props = try? await vt.load(.nominalFrameRate, .naturalSize, .preferredTransform) else { continue }
+            let r = rate(props.0)
+            let sz = props.1.applying(props.2)
             let w = Int(abs(sz.width)), h = Int(abs(sz.height))
             let key = "\(r.num)/\(r.den)-\(w)x\(h)"
             if formats[key] == nil {
@@ -254,9 +258,9 @@ enum FCPXML {
             }
             let fmt = formats[key]!
             let id = "r\(n)"; n += 1
-            let start = timecodeStart(a, rate: r)
-            let dur = frames(a.duration.seconds, r)
-            let audio = !a.tracks(withMediaType: .audio).isEmpty
+            let start = await timecodeStart(a, rate: r)
+            let dur = frames((try? await a.load(.duration))?.seconds ?? 0, r)
+            let audio = !((try? await a.loadTracks(withMediaType: .audio)) ?? []).isEmpty
             assets[s.url] = (id, fmt.id, r, start, dur, audio)
             res += "    <asset id=\"\(id)\" name=\"\(esc(s.url.deletingPathExtension().lastPathComponent))\" start=\"\(t(start, r))\" duration=\"\(t(dur, r))\" hasVideo=\"1\" hasAudio=\"\(audio ? 1 : 0)\" format=\"\(fmt.id)\"\(audio ? " audioSources=\"1\" audioChannels=\"2\" audioRate=\"48000\"" : "")>\n"
             res += "      <media-rep kind=\"original-media\" src=\"\(esc(s.url.absoluteString))\"/>\n"

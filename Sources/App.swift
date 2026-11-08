@@ -565,7 +565,7 @@ struct DoneView: View {
                     Text("\(plural(sorter.gyroOffer.count, "Clip enthält", "Clips enthalten")) Gyrodaten (\(sorter.gyroOfferByCamera.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", "))) – jetzt in Gyroflow stabilisieren?")
                         .font(.system(size: 12, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 8) {
-                        Button { gyro.start(clips: sorter.gyroOffer, folders: sorter.folders) } label: {
+                        Button { Task { await gyro.start(clips: sorter.gyroOffer, folders: sorter.folders) } } label: {
                             Label("Jetzt stabilisieren", systemImage: "gyroscope")
                                 .frame(maxWidth: .infinity).frame(height: 40)
                                 .background(RoundedRectangle(cornerRadius: 12).fill(Theme.mint.opacity(0.35)))
@@ -606,7 +606,7 @@ struct DoneView: View {
             }
             if !cancelled && store.showGyroButton {
                 HStack(spacing: 8) {
-                    Button { gyro.start(folders: sorter.folders) } label: {
+                    Button { Task { await gyro.start(folders: sorter.folders) } } label: {
                         Label("Clips mit Gyroflow stabilisieren", systemImage: "gyroscope")
                             .frame(maxWidth: .infinity).frame(height: 44)
                             .background(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.mint, lineWidth: 1.5))

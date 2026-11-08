@@ -160,15 +160,15 @@ final class ClipBrowser: ObservableObject {
             let g = AVAssetImageGenerator(asset: AVURLAsset(url: u))
             g.appliesPreferredTrackTransform = true
             g.maximumSize = CGSize(width: 320, height: 320)
-            guard let cg = try? g.copyCGImage(at: CMTime(seconds: 1, preferredTimescale: 600), actualTime: nil) else { return nil }
+            guard let cg = try? await g.image(at: CMTime(seconds: 1, preferredTimescale: 600)).image else { return nil }
             return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }.value
         if let img { thumbs[u] = img }
     }
 
-    func rotate(clockwise: Bool) {
+    func rotate(clockwise: Bool) async {
         guard let s = selected else { return }
-        if GyroRunner.orientationSync(s.url) == FolderNames.square {
+        if await GyroRunner.videoOrientation(s.url) == FolderNames.square {
             message = "\(s.url.lastPathComponent) ist quadratisch – Drehen ändert am Format nichts. Hochkant oder Quer schneidest du später im Schnitt aus dem Quadrat."
             return
         }
@@ -204,8 +204,8 @@ struct ClipBrowserSheet: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     Text(cb.selected?.url.lastPathComponent ?? "").font(.system(size: 12, design: .monospaced)).lineLimit(1)
                     HStack(spacing: 10) {
-                        Button { cb.rotate(clockwise: false) } label: { Label("Links drehen", systemImage: "rotate.left") }
-                        Button { cb.rotate(clockwise: true) } label: { Label("Rechts drehen", systemImage: "rotate.right") }
+                        Button { Task { await cb.rotate(clockwise: false) } } label: { Label("Links drehen", systemImage: "rotate.left") }
+                        Button { Task { await cb.rotate(clockwise: true) } } label: { Label("Rechts drehen", systemImage: "rotate.right") }
                         Button { if let u = cb.selected?.url { NSWorkspace.shared.activateFileViewerSelecting([u]) } } label: {
                             Image(systemName: "folder") }.help("Im Finder zeigen")
                     }

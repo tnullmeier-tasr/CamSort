@@ -82,7 +82,7 @@ final class TagRunner: ObservableObject {
             if cancelled { break }
             let clip = queue[index]
             currentFile = clip.lastPathComponent
-            let tags = await Task.detached(priority: .userInitiated) { Self.analyze(clip) }.value
+            let tags = await Task.detached(priority: .userInitiated) { await Self.analyze(clip) }.value
             if !tags.isEmpty {
                 if Self.addFinderTags(tags, to: clip) {
                     for t in tags { tagCounts[t, default: 0] += 1 }
@@ -103,7 +103,7 @@ final class TagRunner: ObservableObject {
 
     // MARK: Analyse (läuft im Hintergrund)
 
-    nonisolated static func analyze(_ url: URL) -> [String] {
+    nonisolated static func analyze(_ url: URL) async -> [String] {
         let asset = AVURLAsset(url: url)
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
@@ -111,7 +111,7 @@ final class TagRunner: ObservableObject {
         gen.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
         gen.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 600)
 
-        let duration = durationSeconds(asset)
+        let duration = await durationSeconds(asset)
         guard duration > 0 else { return [] }
         // Alle ~3 s ein Bild, höchstens 12 pro Clip
         let n = max(1, min(12, Int(duration / 3)))
@@ -119,7 +119,7 @@ final class TagRunner: ObservableObject {
         var brands = Set<String>()
         for i in 0..<n {
             let t = CMTime(seconds: duration * (Double(i) + 0.5) / Double(n), preferredTimescale: 600)
-            guard let img = try? gen.copyCGImage(at: t, actualTime: nil) else { continue }
+            guard let img = try? await gen.image(at: t).image else { continue }
             let handler = VNImageRequestHandler(cgImage: img, options: [:])
             let classify = VNClassifyImageRequest()
             let text = VNRecognizeTextRequest()
@@ -141,8 +141,8 @@ final class TagRunner: ObservableObject {
         return Array(Set(tags)).sorted()
     }
 
-    nonisolated static func durationSeconds(_ asset: AVURLAsset) -> Double {
-        let d = asset.duration.seconds
+    nonisolated static func durationSeconds(_ asset: AVURLAsset) async -> Double {
+        guard let d = (try? await asset.load(.duration))?.seconds else { return 0 }
         return d.isFinite ? d : 0
     }
 

@@ -56,11 +56,11 @@ final class GyroRunner: ObservableObject {
     // MARK: Sony-Clips sammeln
 
     /// Unstabilisierte Clips mit Gyrodaten (Sony, DJI, GoPro, Insta360) in Hochkant/Quer-Ordnern – erst alle Hochkant, dann alle Quer.
-    func collectSonyClips(in folders: [URL]) -> (hochkant: [URL], quer: [URL]) {
-        Self.collectGyroClips(in: folders, suffixes: store.gyroSuffixList)
+    func collectSonyClips(in folders: [URL]) async -> (hochkant: [URL], quer: [URL]) {
+        await Self.collectGyroClips(in: folders, suffixes: store.gyroSuffixList)
     }
 
-    nonisolated static func collectGyroClips(in folders: [URL], suffixes: [String]) -> (hochkant: [URL], quer: [URL]) {
+    nonisolated static func collectGyroClips(in folders: [URL], suffixes: [String]) async -> (hochkant: [URL], quer: [URL]) {
         let fm = FileManager.default
         var h: [URL] = [], q: [URL] = []
         for base in folders {
@@ -73,7 +73,7 @@ final class GyroRunner: ObservableObject {
                     continue
                 }
                 guard Sorter.videoExt.contains(u.pathExtension.lowercased()) else { continue }
-                if let g = classify(u, suffixes: suffixes) {
+                if let g = await classify(u, suffixes: suffixes) {
                     if g == FolderNames.portrait { h.append(u) } else { q.append(u) }
                 }
             }
@@ -82,25 +82,31 @@ final class GyroRunner: ObservableObject {
     }
 
     /// Ausrichtung des Clips, wenn er sortiert, unstabilisiert und Gyroflow-tauglich ist – sonst nil.
-    nonisolated static func classify(_ u: URL, suffixes: [String]) -> String? {
+    nonisolated static func classify(_ u: URL, suffixes: [String]) async -> String? {
         let stem = u.deletingPathExtension().lastPathComponent.lowercased()
         if suffixes.contains(where: { stem.contains($0) }) { return nil }       // schon stabilisiert
         let comps = u.pathComponents
         guard FolderNames.isSortedVideoPath(comps) else { return nil }
         let dirs = comps.dropLast()
-        let group = dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.portrait) }) || dirs.last(where: { $0.contains("Hochkant") }) != nil ? FolderNames.portrait
-                  : dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.landscape) }) || dirs.last(where: { $0.contains("Quer") }) != nil ? FolderNames.landscape
-                  : orientationSync(u)
+        let group: String
+        if dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.portrait) }) || dirs.last(where: { $0.contains("Hochkant") }) != nil {
+            group = FolderNames.portrait
+        } else if dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.landscape) }) || dirs.last(where: { $0.contains("Quer") }) != nil {
+            group = FolderNames.landscape
+        } else {
+            group = await videoOrientation(u)
+        }
         guard !hasStabilizedSibling(u, suffixes: suffixes) else { return nil }
         guard gyroSource(u) != nil else { return nil }
         return group
     }
 
     /// Hochkant/Quer direkt aus dem Video (wenn der Ordnername es nicht verrät)
-    nonisolated static func orientationSync(_ u: URL) -> String {
+    nonisolated static func videoOrientation(_ u: URL) async -> String {
         let a = AVURLAsset(url: u)
-        guard let t = a.tracks(withMediaType: .video).first else { return "Quer" }
-        let r = t.naturalSize.applying(t.preferredTransform)
+        guard let found = try? await a.loadTracks(withMediaType: .video), let t = found.first,
+              let props = try? await t.load(.naturalSize, .preferredTransform) else { return "Quer" }
+        let r = props.0.applying(props.1)
         return FolderNames.orientation(width: Double(abs(r.width)), height: Double(abs(r.height))) ?? "Quer"
     }
 
@@ -177,12 +183,16 @@ final class GyroRunner: ObservableObject {
 
     // MARK: Ablauf
 
-    func start(folders: [URL]) { start(folders: folders, clips: nil) }
+    func start(folders: [URL]) async { await start(folders: folders, clips: nil) }
 
     /// Mit fester Liste (z. B. aus dem Fertig-Bildschirm „X Clips enthalten Gyrodaten“)
-    func start(clips list: [URL], folders: [URL]) { start(folders: folders, clips: list) }
+    func start(clips list: [URL], folders: [URL]) async { await start(folders: folders, clips: list) }
 
-    private func start(folders: [URL], clips list: [URL]?) {
+    /// Verhindert einen zweiten Start, während die Clips (asynchron) gesammelt werden
+    private var preparing = false
+
+    private func start(folders: [URL], clips list: [URL]?) async {
+        guard !preparing else { return }
         errors = []; done = []; cancelled = false; pauseRequested = false
         guard let app = appURL, let exe = executable(in: app) else {
             state = .failed("Gyroflow wurde nicht gefunden. Bitte unter Einstellungen › Gyroflow die Gyroflow-App auswählen.")
@@ -199,14 +209,18 @@ final class GyroRunner: ObservableObject {
             return
         }
         var clips: (hochkant: [URL], quer: [URL]) = ([], [])
-        if list == nil { clips = collectSonyClips(in: folders) }
+        preparing = true
+        if list == nil { clips = await collectSonyClips(in: folders) }
         if let list {
             let fm = FileManager.default
             let keep = list.filter { fm.fileExists(atPath: $0.path) }
-            let h = keep.filter { Self.isPortraitFolder($0) }.sorted { $0.path < $1.path }
-            let q = keep.filter { !Self.isPortraitFolder($0) }.sorted { $0.path < $1.path }
-            clips = (h, q)
+            var h: [URL] = [], q: [URL] = []
+            for u in keep {
+                if await Self.isPortraitFolder(u) { h.append(u) } else { q.append(u) }
+            }
+            clips = (h.sorted { $0.path < $1.path }, q.sorted { $0.path < $1.path })
         }
+        preparing = false
         queue = clips.hochkant + clips.quer
         guard !queue.isEmpty else {
             state = .failed("Keine unstabilisierten Clips mit Gyrodaten gefunden. Entweder sind schon alle stabilisiert, oder der Ordner wurde noch nicht sortiert.")
@@ -218,18 +232,19 @@ final class GyroRunner: ObservableObject {
         Task { await runAll(exe: exe, preset: preset, hochkantCount: clips.hochkant.count, folders: folders) }
     }
 
-    nonisolated static func isPortraitFolder(_ u: URL) -> Bool {
+    nonisolated static func isPortraitFolder(_ u: URL) async -> Bool {
         let dirs = u.pathComponents.dropLast()
         if dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.portrait) || $0.contains("Hochkant") }) { return true }
         if dirs.contains(where: { FolderNames.fold($0) == FolderNames.fold(FolderNames.landscape) || $0.contains("Quer") }) { return false }
-        return orientationSync(u) == FolderNames.portrait
+        return await videoOrientation(u) == FolderNames.portrait
     }
 
     /// Kodierte Bildgröße, wenn sie nicht 16:9 bzw. 9:16 ist (z. B. 4:3 der DJI Avata) – sonst nil.
-    nonisolated static func nonWideSize(_ u: URL) -> (w: Int, h: Int)? {
+    nonisolated static func nonWideSize(_ u: URL) async -> (w: Int, h: Int)? {
         let a = AVURLAsset(url: u)
-        guard let t = a.tracks(withMediaType: .video).first else { return nil }
-        let w = Int(abs(t.naturalSize.width).rounded()), h = Int(abs(t.naturalSize.height).rounded())
+        guard let found = try? await a.loadTracks(withMediaType: .video), let t = found.first,
+              let size = try? await t.load(.naturalSize) else { return nil }
+        let w = Int(abs(size.width).rounded()), h = Int(abs(size.height).rounded())
         guard w > 0, h > 0 else { return nil }
         let r = Double(max(w, h)) / Double(min(w, h))
         return abs(r - 16.0 / 9.0) < 0.03 ? nil : (w, h)
@@ -275,7 +290,7 @@ final class GyroRunner: ObservableObject {
         var args = [clip.path, "--preset", preset, "-t", suffix, "-f", "--stdout-progress"]
         // Seitenverhältnis beibehalten (z. B. Avata 4:3): Ausgabegröße = Quellgröße statt Preset-Größe.
         // Gyroflow-CLI: -p/--out-params "{ 'output_width': W, 'output_height': H }" (docs.gyroflow.xyz › Command line)
-        if store.gyroKeepAspect, let sz = Self.nonWideSize(clip) {
+        if store.gyroKeepAspect, let sz = await Self.nonWideSize(clip) {
             args += ["-p", "{ 'output_width': \(sz.w), 'output_height': \(sz.h) }"]
         }
         p.arguments = args

@@ -136,10 +136,10 @@ struct E2E {
         check(before == after, "Zweiter Lauf (Aktualisieren) verändert nichts (\(sorter.movedTotal) verschoben)")
 
         // 5) Gyroflow: Sony-Clips finden (Hochkant zuerst), dann stabilisierte Datei trennen
-        let clips = gyro.collectSonyClips(in: [root])
+        let clips = await gyro.collectSonyClips(in: [root])
         check(clips.hochkant.map(\.lastPathComponent).sorted() == ["C0002.MP4", "C0003.MP4"] && clips.quer.map(\.lastPathComponent) == ["C0001.MP4"],
               "Gyroflow-Auswahl: nur Sony, Hochkant=\(clips.hochkant.map(\.lastPathComponent)) Quer=\(clips.quer.map(\.lastPathComponent))")
-        gyro.start(folders: [root])  // ohne Preset → verständliche Meldung erwartet
+        await gyro.start(folders: [root])  // ohne Preset → verständliche Meldung erwartet
         if case .failed(let m) = gyro.state { check(m.contains("Preset") || m.contains("nicht gefunden"), "Ohne Gyroflow/Preset: klare Meldung statt Absturz („\(m.prefix(60))…“)") } else { check(false, "Ohne Gyroflow/Preset: Meldung erwartet") }
         render(GyroView(), "08-gyroflow-hinweis")
         gyro.queue = clips.hochkant + clips.quer; gyro.index = 1; gyro.currentGroup = "Hochkant"
@@ -299,8 +299,9 @@ struct E2E {
             var ok = true
             do { try LosslessRotate.rotate(t, clockwise: true) } catch { ok = false; report.append("ℹ️ Drehfehler: \(error)") }
             let after1 = try? Data(contentsOf: t)
-            let tr = AVURLAsset(url: t).tracks(withMediaType: .video).first
-            let r = tr.map { $0.naturalSize.applying($0.preferredTransform) }
+            var r: CGSize? = nil
+            if let trs = try? await AVURLAsset(url: t).loadTracks(withMediaType: .video), let tr = trs.first,
+               let props = try? await tr.load(.naturalSize, .preferredTransform) { r = props.0.applying(props.1) }
             check(ok && r != nil && abs(r!.height) > abs(r!.width), "Drehen: Quer-Clip ist danach Hochkant")
             check(before?.count == after1?.count, "Drehen: Dateigröße identisch (nichts neu berechnet)")
             var diff = 0
@@ -405,7 +406,7 @@ struct E2E {
             check(err == nil && store.gyroPresetPath.hasPrefix(LearnedStore.presetDir.path), "Preset wird in CamSorts eigenen Ordner übernommen")
             try? fmx.removeItem(at: src)
             check(fmx.isReadableFile(atPath: store.gyroPresetPath), "Preset bleibt nutzbar, auch wenn das Original gelöscht wurde")
-            gyro.start(folders: [root])
+            await gyro.start(folders: [root])
             if case .failed(let m) = gyro.state { check(!m.contains("kein Gyroflow-Preset") && !m.contains("nicht lesbar"), "Mit Preset kommt keine Preset-Meldung mehr („\(m.prefix(50))…“)") }
             else { check(true, "Mit Preset kommt keine Preset-Meldung mehr") }
             gyro.close()
