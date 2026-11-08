@@ -123,14 +123,14 @@ final class Sorter: ObservableObject {
 
     let store: LearnedStore
 
-    static let videoExt: Set<String> = ["mp4", "mov", "m4v", "insv", "mts", "m2ts", "avi", "mkv", "3gp", "mxf"]
-    static let photoExt: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "dng", "arw", "hif", "tif", "tiff", "raw",
+    nonisolated static let videoExt: Set<String> = ["mp4", "mov", "m4v", "insv", "mts", "m2ts", "avi", "mkv", "3gp", "mxf"]
+    nonisolated static let photoExt: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "dng", "arw", "hif", "tif", "tiff", "raw",
                                         "cr2", "cr3", "nef", "raf", "orf", "rw2", "insp", "webp", "gif", "srw", "pef"]
-    static let musicExt: Set<String> = ["mp3", "wav", "aac", "m4a", "aif", "aiff", "flac", "ogg", "opus", "wma", "caf"]
-    static let archiveExt: Set<String> = ["zip", "rar", "7z", "tar", "gz", "tgz"]
-    static let projectExt: Set<String> = ["fcpbundle", "fcpxml", "fcpxmld", "fcpxd"]
-    static let sideExt: Set<String> = ["gyroflow", "xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
-    static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini", "localized"]
+    nonisolated static let musicExt: Set<String> = ["mp3", "wav", "aac", "m4a", "aif", "aiff", "flac", "ogg", "opus", "wma", "caf"]
+    nonisolated static let archiveExt: Set<String> = ["zip", "rar", "7z", "tar", "gz", "tgz"]
+    nonisolated static let projectExt: Set<String> = ["fcpbundle", "fcpxml", "fcpxmld", "fcpxd"]
+    nonisolated static let sideExt: Set<String> = ["gyroflow", "xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
+    nonisolated static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini", "localized"]
     static var fixedOutput: Set<String> { FolderNames.outputNames.union(["Musik", "ZIP", "FCP", "Hochkant", "Quer", "Quadratisch", FolderNames.square, "Stabilisiert", "Original", "Gyroflow-Projekte"]) }
 
     private var dupForAll: DupChoice?
@@ -230,7 +230,7 @@ final class Sorter: ObservableObject {
         // Nur Ordner, in denen Gyroflow wirklich etwas erzeugt hat
         var jobs: [(URL, String)] = []
         var untouched = 0
-        for (dir, files) in byDir {
+        for (_, files) in byDir {
             let videos = files.filter { $0.pathExtension.lowercased() != "gyroflow" }
             guard videos.contains(where: isStabilized) else {
                 if !videos.isEmpty { untouched += 1 }

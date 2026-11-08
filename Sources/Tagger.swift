@@ -24,7 +24,7 @@ final class TagRunner: ObservableObject {
     private var paused = false
 
     // Vision-Begriffe (englisch) → deutsche Tags. Nur diese werden übernommen, damit keine Flut an Tags entsteht.
-    static let labelMap: [String: String] = [
+    nonisolated static let labelMap: [String: String] = [
         "people": "Person", "person": "Person", "adult": "Person", "child": "Person", "portrait": "Person", "crowd": "Personen",
         "car": "Auto", "automobile": "Auto", "sports_car": "Auto", "convertible": "Auto", "suv": "Auto", "sedan": "Auto",
         "coupe": "Auto", "jeep": "Auto", "pickup_truck": "Auto", "race_car": "Auto", "vehicle": "Fahrzeug",
@@ -42,7 +42,7 @@ final class TagRunner: ObservableObject {
         "dog": "Hund", "cat": "Katze", "food": "Essen", "indoor": "Innen", "interior_room": "Innen",
     ]
 
-    static let brands: [String] = [
+    nonisolated static let brands: [String] = [
         "Porsche", "BMW", "Mercedes", "Mercedes-Benz", "AMG", "Audi", "Volkswagen", "VW", "Maserati", "Ferrari",
         "Lamborghini", "Ford", "Opel", "Toyota", "Tesla", "MINI", "Jaguar", "Land Rover", "Range Rover", "Bentley",
         "Rolls-Royce", "Aston Martin", "McLaren", "Bugatti", "Ducati", "Harley-Davidson", "KTM", "Kawasaki", "Honda",
