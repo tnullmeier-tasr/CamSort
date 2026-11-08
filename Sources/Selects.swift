@@ -214,7 +214,8 @@ enum FCPXML {
                                        (29.97, .init(num: 1001, den: 30000)), (30, .init(num: 100, den: 3000)), (47.952, .init(num: 1001, den: 48000)),
                                        (48, .init(num: 100, den: 4800)), (50, .init(num: 100, den: 5000)), (59.94, .init(num: 1001, den: 60000)),
                                        (60, .init(num: 100, den: 6000)), (100, .init(num: 100, den: 10000)), (119.88, .init(num: 1001, den: 120000)),
-                                       (120, .init(num: 100, den: 12000))]
+                                       (120, .init(num: 100, den: 12000)),
+                                       (200, .init(num: 100, den: 20000)), (239.76, .init(num: 1001, den: 240000)), (240, .init(num: 100, den: 24000))]
         let f = Double(fps > 0 ? fps : 25)
         return table.min { abs($0.0 - f) < abs($1.0 - f) }!.1
     }

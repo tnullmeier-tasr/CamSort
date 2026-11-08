@@ -590,14 +590,15 @@ final class Sorter: ObservableObject {
 
     /// Analysiert alle Videos je Dreh und legt nur die Ordner an, die sich dort unterscheiden.
     private func layoutCompact(_ videos: [Job], siblings: [URL: Set<String>]) async -> Bool {
-        struct Info { let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String?; let start: Date; let end: Date }
+        struct Info { let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String?; let fps: String; let start: Date; let end: Date }
         var lv = store.levels
         var infos: [Info] = []
         for job in videos {
             if Task.isCancelled { return false }
             currentFile = job.url.lastPathComponent
             let asset = AVURLAsset(url: job.url)
-            let o = await orientation(of: asset)
+            let props = await videoProps(of: asset)
+            let o = props.orient
             var sib = siblings[job.dir] ?? []
             let stem = job.url.deletingPathExtension().lastPathComponent
             if let x = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: job.dir) { sib.insert(x.lastPathComponent) }
@@ -616,7 +617,8 @@ final class Sorter: ObservableObject {
                 }
             }
             let (st, en) = await recordingTime(asset, url: job.url)
-            infos.append(Info(job: job, cam: cam, lens: lens, speed: speed, orient: o, start: st, end: en))
+            let fps = cam.hasPrefix(LearnedStore.folderPrefix) ? "" : fpsFolder(for: job.url, nominal: props.nominalFps)
+            infos.append(Info(job: job, cam: cam, lens: lens, speed: speed, orient: o, fps: fps, start: st, end: en))
             noteStart(st, for: job.url)
         }
         // Rückfrage: mehrere Aufnahmetage → auch nach Datum sortieren?
@@ -640,6 +642,20 @@ final class Sorter: ObservableObject {
             case "under":
                 if let ci = lv.firstIndex(of: "camera") { lv.insert("date", at: ci + 1) } else { lv.insert("date", at: min(1, lv.count)) }
             default: break
+            }
+        }
+        // Rückfrage: verschiedene Bildraten → auch nach FPS sortieren? Vorhandene FPS-Ordner → ohne Frage weiterführen.
+        if !lv.contains("fps") && !infos.isEmpty {
+            let drehs = Set(infos.map { Self.drehRoot($0.job.dir) })
+            if drehs.contains(where: { hasFpsFolders($0.appendingPathComponent(FolderNames.videos)) }) {
+                lv = LearnedStore.insertingFps(into: lv)
+            } else {
+                let fresh = infos.filter { !$0.job.dir.pathComponents.contains(where: FolderNames.isVideos) && !$0.fps.isEmpty }
+                let ex = LearnedStore.insertingFps(into: lv).map { LevelBuilder.sample($0, store) }
+                if let q = fpsQuestion(fresh.map(\.fps), example: "\(FolderNames.videos)/" + (store.nestLevels ? ex.joined(separator: "/") : ex.joined(separator: FolderNames.separator)) + "/…") {
+                    guard let a = await resolve([q]) else { return false }
+                    if a["fps"] == "yes" { lv = LearnedStore.insertingFps(into: lv) }
+                }
             }
         }
         // je Dreh: welche Merkmale unterscheiden sich?
@@ -688,6 +704,7 @@ final class Sorter: ObservableObject {
                     case "orientation": if let o = i.orient { parts.append(o) }
                     case "speed": if let s = i.speed { parts.append(s) }
                     case "date": parts.append(store.dayString(i.start))
+                    case "fps": if !i.fps.isEmpty { parts.append(i.fps) }
                     default: break
                     }
                 }
@@ -866,11 +883,71 @@ final class Sorter: ObservableObject {
 
     // MARK: Ausrichtung
 
-    private func orientation(of asset: AVURLAsset) async -> String? {
+    private func orientation(of asset: AVURLAsset) async -> String? { await videoProps(of: asset).orient }
+
+    /// Ausrichtung und nominale Bildrate in EINEM Ladevorgang der Videospur (keine doppelte Analyse pro Datei)
+    private func videoProps(of asset: AVURLAsset) async -> (orient: String?, nominalFps: Double) {
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-              let (size, transform) = try? await track.load(.naturalSize, .preferredTransform) else { return nil }
+              let (size, transform, rate) = try? await track.load(.naturalSize, .preferredTransform, .nominalFrameRate) else { return (nil, 0) }
         let r = size.applying(transform)
-        return FolderNames.orientation(width: Double(abs(r.width)), height: Double(abs(r.height)))
+        return (FolderNames.orientation(width: Double(abs(r.width)), height: Double(abs(r.height))), Double(rate))
+    }
+
+    // MARK: Bildrate
+
+    /// Sony-Zeitlupe (S&Q): nominal z. B. 25p, aufgenommen mit 100p. Steht im NRT-XML als
+    /// <VideoFrame … captureFps="100p" formatFps="25p">. Liefert die Aufnahme-Bildrate oder nil.
+    nonisolated static func captureFps(fromXML s: String) -> Double? {
+        guard let tagR = s.range(of: #"<VideoFrame[^>]*>"#, options: .regularExpression) else { return nil }
+        let tag = String(s[tagR])
+        guard let r = tag.range(of: #"captureFps="[0-9.]+"#, options: .regularExpression) else { return nil }
+        let v = Double(tag[r].dropFirst("captureFps=\"".count))
+        return v.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// FPS-Ordnername für einen Clip: Sony-Aufnahme-FPS (captureFps), sonst nominale Bildrate der Videospur.
+    private func fpsFolder(for url: URL, nominal: Double, bytes: Data? = nil) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        var fps = nominal
+        if let xu = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: url.deletingLastPathComponent()),
+           let x = try? String(contentsOf: xu, encoding: .utf8), let c = Self.captureFps(fromXML: x) { fps = c }
+        else if let s = String(data: bytes ?? headTail(url), encoding: .isoLatin1), let c = Self.captureFps(fromXML: s) { fps = c }
+        return FolderNames.fpsName(FolderNames.fpsClass(fps))
+    }
+
+    /// Frage „Auch nach Bildrate sortieren?“ – nur bei mindestens zwei verschiedenen Bildraten. nil = nicht fragen (Antwort „no“).
+    func fpsQuestion(_ names: [String], example pos: String) -> PreRunQuestion? {
+        guard store.fpsMode != "off" else { return nil }
+        var count: [String: Int] = [:]
+        for n in names { count[n, default: 0] += 1 }
+        guard count.count > 1 else { return nil }
+        func num(_ k: String) -> Int { Int(k.prefix { $0.isNumber }) ?? Int.max }
+        let list = count.keys.sorted { (num($0), $0) < (num($1), $1) }.map { "\($0): \(count[$0]!)" }.joined(separator: ", ")
+        return PreRunQuestion(
+            key: "fps", title: "Auch nach Bildrate sortieren?",
+            message: "Die Clips haben unterschiedliche Bildraten (\(list)).",
+            icon: "speedometer",
+            options: [QuestionOption(id: "yes", label: "Ja, unter der Kamera", detail: pos),
+                      QuestionOption(id: "no", label: "Nein", detail: "Alle Bildraten zusammen")],
+            preset: nil,
+            remember: { [weak self] a in
+                guard let self else { return }
+                if a == "yes" { self.store.levels = LearnedStore.insertingFps(into: self.store.levels) } else { self.store.fpsMode = "off" }
+            })
+    }
+
+    /// Gibt es unter `root` (bis 4 Ebenen tief) schon FPS-Ordner? Dann Struktur ohne Frage weiterführen.
+    func hasFpsFolders(_ root: URL, depth: Int = 4) -> Bool {
+        guard depth > 0, let kids = try? fm.contentsOfDirectory(atPath: root.path) else { return false }
+        for k in kids where !k.hasPrefix(".") {
+            var isDir: ObjCBool = false
+            let u = root.appendingPathComponent(k)
+            guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            if FolderNames.hasFpsPart(k) { return true }
+            if FolderNames.isOrientation(k) || ["Stabilisiert", "Original", "Gyroflow-Projekte"].contains(k) { continue }
+            if hasFpsFolders(u, depth: depth - 1) { return true }
+        }
+        return false
     }
 
     // MARK: Kamera
@@ -1154,7 +1231,8 @@ extension Sorter {
         }
         let candidates = items.filter { e in
             e.isDir && !e.isLink && !e.isPackage && !isCard(e)
-                && !FolderNames.isOrientation(e.url.lastPathComponent) && !skip.contains(FolderNames.fold(e.url.lastPathComponent))
+                && !FolderNames.isOrientation(e.url.lastPathComponent) && !FolderNames.hasFpsPart(e.url.lastPathComponent)
+                && !skip.contains(FolderNames.fold(e.url.lastPathComponent))
         }
         // Unterordner, die nur Kartenkopien DIESER Kamera sind (z. B. „A1/A1 Karte 2/PRIVATE“, „A1/Karte 1/DCIM“)
         let baseName = FolderNames.fold(base.lastPathComponent)
@@ -1171,7 +1249,8 @@ extension Sorter {
             if store.isDayFolder(c.url.lastPathComponent) {
                 // schon „Tagesordner oben“: <Eltern>/<Tag>/<Kamera>
                 for k in entries(c.url) ?? [] where k.isDir && !k.isLink && !k.isPackage
-                    && !FolderNames.isOrientation(k.url.lastPathComponent) && !skip.contains(FolderNames.fold(k.url.lastPathComponent))
+                    && !FolderNames.isOrientation(k.url.lastPathComponent) && !FolderNames.hasFpsPart(k.url.lastPathComponent)
+                    && !skip.contains(FolderNames.fold(k.url.lastPathComponent))
                     && !Self.cardish.contains(k.url.lastPathComponent.uppercased()) {
                     cams.append(OwnCam(url: k.url, group: base, inDayFolder: true))
                 }
@@ -1277,11 +1356,11 @@ extension Sorter {
         total = vids.count + others.count
         processed = 0
         phase = .sorting
-        let extras = store.levels.filter { ["lens", "length", "speed"].contains($0) }
+        var extras = store.levels.filter { ["lens", "length", "speed", "fps"].contains($0) }
         var emptied = Set<URL>()   // Ordner, aus denen etwas verschoben wurde → danach aufräumen, wenn leer
 
         // 3a) Videos analysieren (Ausrichtung, Zusatzebenen, Aufnahmezeit) – noch nichts verschieben
-        struct VInfo { let v: Item; let o: String; let parts: [String]; let start: Date }
+        struct VInfo { let v: Item; let o: String; var parts: [String]; let fps: String; let start: Date }
         var infos: [VInfo] = []
         for v in vids {
             if Task.isCancelled { phase = .cancelled; return }
@@ -1290,12 +1369,14 @@ extension Sorter {
             let size = (try? v.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             if size == 0 { problems.append("\(v.url.lastPathComponent): leere Datei (0 Byte) – nicht verschoben"); processed += 1; continue }
             let asset = AVURLAsset(url: v.url)
-            guard let o = await orientation(of: asset) else {
+            let props = await videoProps(of: asset)
+            guard let o = props.orient else {
                 problems.append("\(v.url.lastPathComponent): Bildgröße nicht lesbar (beschädigt?) – nicht verschoben"); processed += 1; continue
             }
             let stem = v.url.deletingPathExtension().lastPathComponent
             let dir = v.url.deletingLastPathComponent()
             let (st, en) = await recordingTime(asset, url: v.url)
+            let fps = fpsFolder(for: v.url, nominal: props.nominalFps)
             var parts: [String] = []
             for l in extras {
                 switch l {
@@ -1317,10 +1398,11 @@ extension Sorter {
                         case .unreadable: break
                         }
                     }
+                case "fps": parts.append(fps)
                 default: break
                 }
             }
-            infos.append(VInfo(v: v, o: o, parts: parts, start: st))
+            infos.append(VInfo(v: v, o: o, parts: parts, fps: fps, start: st))
             noteStart(st, for: v.url)
         }
 
@@ -1334,6 +1416,18 @@ extension Sorter {
                                      example: ("Dreh/\(store.dayString(Date()))/A1/Hochkant", "Dreh/A1/\(store.dayString(Date()))/Hochkant")) {
             guard let a = await resolve([q]) else { phase = .cancelled; return }
             dateChoice = a["date"] ?? "off"
+        }
+        // Bildrate: vorhandene FPS-Ordner weiterführen, sonst nur bei mehreren Bildraten fragen. Position: als letzte Zusatzebene, direkt über Hochkant/Quer.
+        if !extras.contains("fps") && !infos.isEmpty {
+            var on = ownCams.contains { hasFpsFolders($0.url) }
+            if !on, let q = fpsQuestion(infos.map(\.fps), example: "A1/" + (extras.isEmpty ? "" : "…/") + "\(infos[0].fps)/Hochkant") {
+                guard let a = await resolve([q]) else { phase = .cancelled; return }
+                on = a["fps"] == "yes"
+            }
+            if on {
+                extras.append("fps")
+                for k in infos.indices { infos[k].parts.append(infos[k].fps) }
+            }
         }
         if dateChoice == "top" && ownCams.contains(where: { $0.group == nil }) {
             hints.append("Tagesordner oben geht nur, wenn der Dreh-Ordner (mit den Kameraordnern) gewählt ist – für direkt gewählte Kameraordner liegen die Tage unter der Kamera.")

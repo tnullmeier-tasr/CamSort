@@ -36,7 +36,45 @@ enum FolderNames {
     }
     /// Liegt der Clip in einem sortierten Bereich? (unter „Videos“ oder – Modus „Meine Kameraordner“ – unter Hochkant/Quer)
     static func isSortedVideoPath(_ comps: [String]) -> Bool {
-        comps.contains(where: isVideos) || comps.dropLast().contains(where: isOrientation)
+        comps.contains(where: isVideos) || comps.dropLast().contains(where: isOrientation) || comps.dropLast().contains(where: isFpsFolder)
+    }
+
+    // MARK: Bildrate (FPS)
+    /// Schablone für FPS-Ordner, {n} = Bildrate (z. B. „{n} fps“ → „50 fps“) – einstellbar
+    static var fpsTemplate = "{n} fps"
+    /// Ordner für Clips ohne feste Bildrate (nominalFrameRate 0/unplausibel, z. B. manche Bildschirmaufnahmen)
+    static var fpsVariable = "Variable fps"
+    /// Standardklassen: (Klasse, Werte, die dazu gehören). Enge Toleranz → 23,976/24 nie 25, 48 nie 50, 119,88/120 nie 100.
+    static let fpsClasses: [(n: Int, values: [Double])] = [
+        (24, [23.976, 24]), (25, [25]), (30, [29.97, 30]), (48, [47.952, 48]), (50, [50]), (60, [59.94, 60]),
+        (100, [100]), (120, [119.88, 120]), (200, [200]), (240, [239.76, 240]),
+    ]
+    /// Bildrate → Klasse. nil = keine feste/plausible Bildrate (variabel).
+    static func fpsClass(_ v: Double) -> Int? {
+        guard v.isFinite, v >= 1, v <= 1000 else { return nil }
+        for c in fpsClasses where c.values.contains(where: { abs($0 - v) <= 0.3 }) { return c.n }
+        return Int(v.rounded())
+    }
+    /// Ordnername für eine Klasse (nil = variabel)
+    static func fpsName(_ n: Int?) -> String {
+        guard let n else { return fpsVariable }
+        let t = fpsTemplate.contains("{n}") ? fpsTemplate : "{n} fps"
+        return t.replacingOccurrences(of: "{n}", with: String(n)).replacingOccurrences(of: "/", with: "-")
+    }
+    /// Ist dieser Name (oder ein Teil davon bei „Ein Ordner“) ein FPS-Ordner? Schablone, Standard „{n} fps“, „Variable fps“ – Groß/Klein egal.
+    static func isFpsFolder(_ s: String) -> Bool {
+        let f = fold(s)
+        if f == fold(fpsVariable) || f == "variable fps" { return true }
+        for t in Set([fpsTemplate, "{n} fps"]) where t.contains("{n}") {
+            let parts = t.components(separatedBy: "{n}")
+            let pat = "^" + parts.map { NSRegularExpression.escapedPattern(for: fold($0)) }.joined(separator: #"\d{1,4}"#) + "$"
+            if f.range(of: pat, options: .regularExpression) != nil { return true }
+        }
+        return false
+    }
+    /// Enthält ein Ordnername (auch zusammengesetzt mit Trennzeichen) einen FPS-Teil?
+    static func hasFpsPart(_ s: String) -> Bool {
+        isFpsFolder(s) || s.components(separatedBy: separator).contains(where: isFpsFolder)
     }
 
     static func load(_ d: UserDefaults = .standard) {
@@ -49,5 +87,7 @@ enum FolderNames {
         sceneWord = s("fnSceneWord", "Szene")
         sceneShowTime = d.object(forKey: "fnSceneTime") as? Bool ?? true
         sceneShowCams = d.object(forKey: "fnSceneCams") as? Bool ?? true
+        fpsTemplate = s("fnFps", "{n} fps")
+        if !fpsTemplate.contains("{n}") { fpsTemplate = "{n} fps" }
     }
 }

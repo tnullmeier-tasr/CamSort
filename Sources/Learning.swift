@@ -139,7 +139,21 @@ final class LearnedStore: ObservableObject {
         ("orientation", "Hochkant / Quer", "rectangle.portrait.on.rectangle.portrait"),
         ("speed", "Drohne: Stand / Fahrt", "airplane"),
         ("date", "Aufnahmetag (Tagesordner)", "calendar"),
+        ("fps", "Bildrate (FPS)", "speedometer"),
     ]
+    /// Ebene „fps“ an sinnvoller Stelle einfügen: vor Hochkant/Quer, sonst direkt unter der Kamera (bzw. dem Tag darunter), sonst ans Ende
+    static func insertingFps(into lv: [String]) -> [String] {
+        guard !lv.contains("fps") else { return lv }
+        var l = lv
+        if let o = l.firstIndex(of: "orientation") { l.insert("fps", at: o) }
+        else if let c = l.firstIndex(of: "camera") {
+            let after = c + 1 < l.count && l[c + 1] == "date" ? c + 2 : c + 1
+            l.insert("fps", at: after)
+        } else { l.append("fps") }
+        return l
+    }
+    /// Rückfrage Bildrate: "ask" (nur fragen, wenn mehrere Bildraten vorkommen) oder "off" (nie fragen). „Immer“ = Ebene im Baukasten aktiv.
+    @Published var fpsMode: String { didSet { d.set(fpsMode, forKey: "fpsMode") } }
     @Published var sceneGapMinutes: Double { didSet { d.set(sceneGapMinutes, forKey: "sceneGapMinutes") } }
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
@@ -176,6 +190,7 @@ final class LearnedStore: ObservableObject {
         ownCameraFolders = d.object(forKey: "ownCameraFolders") as? Bool ?? false
         gyroKeepAspect = d.object(forKey: "gyroKeepAspect") as? Bool ?? true
         dateMode = d.string(forKey: "dateMode") ?? "ask"
+        fpsMode = d.string(forKey: "fpsMode") ?? "ask"
         dateFormat = d.string(forKey: "dateFormat") ?? "yyyy-MM-dd"
         nightToPrevDay = d.object(forKey: "nightToPrevDay") as? Bool ?? false
         renameMode = d.string(forKey: "renameMode") ?? "ask"

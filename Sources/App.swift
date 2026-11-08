@@ -984,6 +984,15 @@ struct SettingsView: View {
                         TextField("yyyy-MM-dd", text: $store.dateFormat).textFieldStyle(.roundedBorder).frame(width: 120)
                         Text("→ \(store.dayString(Date()))").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
+                    WithHelp(title: "Nach Bildrate fragen", text: "Haben die neuen Clips mindestens zwei verschiedene Bildraten (z. B. 25 fps und 100 fps Zeitlupe), fragt CamSort vor dem Verschieben, ob zusätzlich nach Bildrate sortiert werden soll – z. B. Dreh/A1/50 fps/Hochkant. Bei nur einer Bildrate wird nicht gefragt.\n\n„Ja“ gilt nur für diesen Lauf. Mit „Antwort merken“ wird „Ja“ zur festen Ebene im Ordner-Aufbau, „Nein“ stellt die Frage hier auf „Nie“.\n\nGibt es im Dreh schon FPS-Ordner, führt CamSort die Struktur ohne Frage weiter.") {
+                        Picker("Bildrate", selection: $store.fpsMode) {
+                            Text("Fragen").tag("ask"); Text("Nie").tag("off")
+                        }.frame(width: 300)
+                        .disabled(store.levels.contains("fps"))
+                    }
+                    if store.levels.contains("fps") {
+                        Text("Bildrate ist im Ordner-Aufbau fest aktiv – es wird nicht gefragt.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                     WithHelp(title: "Nach Mitternacht", text: "An: Aufnahmen zwischen 0 und 4 Uhr zählen zum Vortag – praktisch bei Abend-Events, die über Mitternacht gehen.") {
                         Toggle("Aufnahmen bis 4 Uhr zählen zum Vortag", isOn: $store.nightToPrevDay)
                     }
@@ -1279,6 +1288,7 @@ struct FolderNamingEditor: View {
     @AppStorage("fnSide") private var side = "Begleitdateien"
     @AppStorage("fnExtras") private var extras = "Extras"
     @AppStorage("fnSquare") private var square = "Quadratisch"
+    @AppStorage("fnFps") private var fpsTemplate = "{n} fps"
     @AppStorage("fnSeparator") private var separator = " · "
     @AppStorage("fnShowCamera") private var showCamera = true
     @AppStorage("fnShowOrientation") private var showOrientation = true
@@ -1310,11 +1320,15 @@ struct FolderNamingEditor: View {
                     GridRow { Text("Begleitdateien").font(.system(size: 11)); TextField("Begleitdateien", text: $side) }
                     GridRow { Text("Extras").font(.system(size: 11)); TextField("Extras", text: $extras) }
                     GridRow { Text("Quadratisch").font(.system(size: 11)); TextField("Quadratisch", text: $square) }
+                    GridRow { Text("Bildrate").font(.system(size: 11)); TextField("{n} fps", text: $fpsTemplate) }
                 }
                 .textFieldStyle(.roundedBorder).controlSize(.small)
             }
             WithHelp(title: "Quadratisch", text: "Quadratisch aufgenommen – daraus lassen sich Hochkant und Quer schneiden (z. B. DJI Osmo Action 6 mit 3840×3840). CamSort legt Clips mit einem Seitenverhältnis zwischen 0,9 und 1,1 in diesen Ordner. Ab 1,1 gilt: breiter = Quer (auch 4:3), höher = Hochkant (auch 3:4). Gyroflow lässt quadratische und 4:3-Clips im Originalformat, wenn das unter Gyroflow eingestellt ist.") {
                 Text("Ordner für 1:1-Clips").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            WithHelp(title: "Ordnername Bildrate", text: "Schablone für FPS-Ordner: {n} wird durch die Bildrate ersetzt. „{n} fps“ → „50 fps“, „{n}p“ → „50p“. Ohne {n} gilt „{n} fps“. Ordner mit dem alten Standardnamen („50 fps“) erkennt CamSort weiterhin als sortiert.") {
+                Text("→ \(fpsTemplate.contains("{n}") ? fpsTemplate.replacingOccurrences(of: "{n}", with: "50") : "50 fps")").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
             }
             WithHelp(title: "Ordnername bei „Szene“", text: "Wie Szenen-Ordner heißen. Statt „Szene“ geht z. B. auch „Take“ oder „Einstellung“.") {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1356,6 +1370,7 @@ struct LevelBuilder: View {
         case "orientation": return "Quer"
         case "speed": return "Fahrt"
         case "date": return s.dayString(Date())
+        case "fps": return FolderNames.fpsName(50)
         default: return id
         }
     }
@@ -1410,6 +1425,11 @@ struct LevelBuilder: View {
                             }.textFieldStyle(.roundedBorder)
                         }
                         .font(.system(size: 11)).controlSize(.small).padding(.leading, 26)
+                    }
+                    if on && lvl.id == "fps" {
+                        WithHelp(title: "Bildrate (FPS)", text: "Ordnet Clips nach ihrer Bildrate, z. B. „25 fps“, „50 fps“, „100 fps“. Gerundet wird auf feste Klassen: 23,976 und 24 → 24 fps, 29,97 → 30, 59,94 → 60, 119,88 → 120 (außerdem 25, 48, 50, 100, 200, 240). 24 und 25 oder 48 und 50 werden nie zusammengelegt.\n\nSony-Zeitlupe (S&Q): Die Datei hat z. B. 25p, aufgenommen wurde aber mit 100p – CamSort liest die Aufnahme-Bildrate aus dem Sony-XML und legt den Clip in „100 fps“.\n\nClips ohne feste Bildrate (manche Bildschirmaufnahmen) kommen in „\(FolderNames.fpsVariable)“. Den Ordnernamen stellst du unter „Ordnernamen“ ein.") {
+                            Text("z. B. \(FolderNames.fpsName(25)), \(FolderNames.fpsName(50)), \(FolderNames.fpsName(100))").font(.system(size: 11)).foregroundStyle(.secondary)
+                        }.padding(.leading, 26)
                     }
                     if on && lvl.id == "speed" {
                         VStack {

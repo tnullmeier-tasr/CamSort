@@ -53,6 +53,15 @@ CamSort fragt nur, wenn es für den Ordner wirklich relevant ist – jede Frage 
 - **Mehrere Aufnahmetage?** → *Tagesordner oben* (`Dreh/2026-10-12/A1/Hochkant`), *unter der Kamera* (`Dreh/A1/2026-10-12/Hochkant`) oder *Nein*. Datum aus den Video-Metadaten, Format einstellbar (Standard `JJJJ-MM-TT`), optional zählen Aufnahmen bis 4 Uhr zum Vortag. Gibt es schon Tagesordner, wird die Struktur ohne Frage weitergeführt. Auch als Baukasten-Ebene *Aufnahmetag*.
 - **Datum in den Ordnernamen?** (nach erfolgreichem Sortieren, nur wenn noch kein Datum im Namen steht): `Pitbike` → `2026-10-12 Pitbike` bzw. `2026-10-12–15 Pitbike`, vorne oder hinten. Nur der Ordner wird umbenannt. Gibt es den Namen schon, ist es eine Karte/Volume-Wurzel oder ein direkt gewählter Kameraordner, bleibt der Name.
 
+## Bildrate (FPS)
+Optionale Ebene *Bildrate (FPS)* im Ordner-Baukasten (kompakt und „Meine Kameraordner“, z. B. `Dreh/A1/50 fps/Hochkant`).
+- **Rückfrage:** Nur wenn die neuen Clips mindestens zwei Bildraten haben: „Auch nach Bildrate sortieren?“ (*Ja, unter der Kamera* / *Nein*, „Antwort merken“). *Ja* ohne Merken gilt nur für diesen Lauf; gemerktes *Ja* aktiviert die Ebene dauerhaft, gemerktes *Nein* stellt die Frage auf *Nie* (Einstellungen › Nach Bildrate fragen). Gibt es schon FPS-Ordner, wird die Struktur ohne Frage weitergeführt.
+- **Klassen (enge Toleranz ±0,3, nie ±1):** 23,976/24 → 24 · 25 · 29,97/30 → 30 · 47,952/48 → 48 · 50 · 59,94/60 → 60 · 100 · 119,88/120 → 120 · 200 · 239,76/240 → 240; sonst nächste ganze Zahl. 24 fällt nie mit 25, 48 nie mit 50, 120 nie mit 100 zusammen.
+- **Sony-Zeitlupe (S&Q):** Die Datei hat z. B. 25p, aufgenommen wurde mit 100p. CamSort liest die Aufnahme-Bildrate `captureFps` aus `<VideoFrame captureFps="100p" formatFps="25p">` im Sony-NRT-XML (Begleit-XML `…M01.XML` oder eingebettet) → Ordner „100 fps“.
+- **Variable Bildrate:** Meldet die Videospur keine plausible Bildrate (0), landet der Clip in „Variable fps“. iPhone-Clips mit variabler Bildrate melden meist ihren Mittelwert (≈ 30) und kommen in dessen Klasse; iPhone-Slo-Mo wird nicht gesondert ausgewertet.
+- **Ordnername:** Schablone unter *Ordnernamen › Bildrate*, Standard `{n} fps`. FPS-Ordner werden beim erneuten Einlesen erkannt (nie als Kamera, auch nicht in der Zeitleiste).
+- Bildrate wird im selben Ladevorgang wie die Bildgröße gelesen (`track.load(.naturalSize, .preferredTransform, .nominalFrameRate)`).
+
 ## Gyrodaten erkennen
 Nach dem Sortieren prüft CamSort jeden Clip auf Bewegungsdaten, die Gyroflow lesen kann (Erkennung wie Gyroflows *telemetry-parser*): Sony (XML), DJI mit eingebetteten Gyrodaten (`djmd` + `DJI meta`, z. B. Avata/Osmo Action), GoPro (GPMF), Insta360. Schon stabilisierte Clips sind nicht dabei. Der Fertig-Bildschirm bietet dann an: *„X Clips enthalten Gyrodaten (A1: 10, Avata: 4) – jetzt stabilisieren?“*. Clips, die nicht 16:9/9:16 sind (4:3, 1:1), behalten beim Stabilisieren ihr Format (`-p "{ 'output_width': …, 'output_height': … }"` an die Gyroflow-CLI; das Preset bleibt unverändert). Einstellbar unter *Gyroflow*.
 

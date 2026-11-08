@@ -35,6 +35,7 @@ struct E2E {
         store.compactLayout = false
         store.ownCameraFolders = false
         store.dateMode = "off"; store.renameMode = "off"   // Rückfragen nur im eigenen Test
+        store.fpsMode = "off"                                // FPS-Rückfrage nur im eigenen Test
         let sorter = Sorter(store: store)
         let gyro = GyroRunner(store: store, sorter: sorter)
         let tagger = TagRunner()
@@ -571,6 +572,62 @@ struct E2E {
                   "Dreh-Ordner umbenannt → „\(renamed.lastPathComponent)“, Pfade nachgezogen")
             check(sorter.gyroOffer.allSatisfy { fmx.fileExists(atPath: $0.path) }, "Gyro-Angebot zeigt nach dem Umbenennen auf echte Dateien")
             store.ownCameraFolders = false; store.dateMode = "off"; store.renameMode = "off"
+        }
+
+        // 6b) Bildrate (FPS): Klassen, Rückfrage nur bei mehreren Bildraten, Ordner, Idempotenz
+        do {
+            let fmx = FileManager.default
+            check(FolderNames.fpsClass(23.976) == 24 && FolderNames.fpsClass(24) == 24 && FolderNames.fpsClass(25) == 25, "FPS-Klassen: 23,976/24 → 24, 25 → 25")
+            check(FolderNames.fpsClass(29.97) == 30 && FolderNames.fpsClass(47.952) == 48 && FolderNames.fpsClass(50) == 50
+                  && FolderNames.fpsClass(59.94) == 60 && FolderNames.fpsClass(100) == 100 && FolderNames.fpsClass(119.88) == 120
+                  && FolderNames.fpsClass(239.76) == 240 && FolderNames.fpsClass(0) == nil, "FPS-Klassen: 30/48/50/60/100/120/240, 0 → variabel")
+            check(Sorter.captureFps(fromXML: "<NonRealTimeMeta><VideoFormat><VideoFrame videoCodec=\"AVC\" captureFps=\"100p\" formatFps=\"25p\"/></VideoFormat></NonRealTimeMeta>") == 100,
+                  "Sony S&Q: captureFps=\"100p\" wird gelesen")
+            check(FolderNames.isFpsFolder("50 fps") && FolderNames.isFpsFolder("50 FPS") && FolderNames.isFpsFolder("Variable fps") && !FolderNames.isFpsFolder("A1"),
+                  "FPS-Ordner werden erkannt (Groß/Klein egal)")
+            let x = root.deletingLastPathComponent().appendingPathComponent("CamSort-Extra")
+            let fdreh = root.deletingLastPathComponent().appendingPathComponent("CamSort-FPS-Dreh")
+            try? fmx.removeItem(at: fdreh)
+            let a1 = fdreh.appendingPathComponent("A1"), b1 = fdreh.appendingPathComponent("B1")
+            try? fmx.createDirectory(at: a1, withIntermediateDirectories: true)
+            try? fmx.createDirectory(at: b1, withIntermediateDirectories: true)
+            for n in ["F25", "F50", "F24"] { try? fmx.copyItem(at: x.appendingPathComponent("\(n).MP4"), to: a1.appendingPathComponent("\(n).MP4")) }
+            store.ownCameraFolders = true; store.fpsMode = "ask"; store.dateMode = "off"; store.renameMode = "off"
+            var fpsAsked = 0
+            func runF(_ dir: URL, answer: String) async {
+                sorter.reset(); sorter.addFolders([dir]); sorter.start()
+                let t0 = Date()
+                while sorter.phase != .done && sorter.phase != .cancelled && Date().timeIntervalSince(t0) < 120 {
+                    if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                    if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                    if let q = sorter.pendingQuestion {
+                        if q.title.contains("Bildrate") {
+                            fpsAsked += 1
+                            if fpsAsked == 1 { render(QuestionSheet(request: q), "21-rueckfrage-bildrate", w: 440, h: 320, sheet: true) }
+                            sorter.answerQuestion(answer, remember: false)
+                        } else { sorter.answerQuestion("off", remember: false) }
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            // nur eine Bildrate → keine Frage
+            try? fmx.copyItem(at: x.appendingPathComponent("F25.MP4"), to: b1.appendingPathComponent("F25.MP4"))
+            await runF(b1, answer: "yes")
+            check(fpsAsked == 0 && fmx.fileExists(atPath: b1.appendingPathComponent("Quer/F25.MP4").path), "Nur eine Bildrate → keine Frage, B1/Quer")
+            // drei Bildraten → Frage, „Ja“ ohne Merken
+            await runF(fdreh, answer: "yes")
+            func exF(_ p: String) -> Bool { fmx.fileExists(atPath: fdreh.appendingPathComponent(p).path) }
+            check(fpsAsked == 1, "Verschiedene Bildraten → genau eine Frage")
+            check(exF("A1/25 fps/Quer/F25.MP4") && exF("A1/50 fps/Quer/F50.MP4"), "Ordner „25 fps“ / „50 fps“ unter der Kamera")
+            check(exF("A1/24 fps/Quer/F24.MP4"), "23,976 fps → eigener Ordner „24 fps“ (nicht 25)")
+            check(!store.levels.contains("fps"), "„Ja“ ohne Merken gilt nur für diesen Lauf")
+            let treeF = ((try? fmx.subpathsOfDirectory(atPath: fdreh.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            await runF(fdreh, answer: "no")
+            let treeF2 = ((try? fmx.subpathsOfDirectory(atPath: fdreh.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            check(fpsAsked == 1 && treeF == treeF2, "Zweiter Lauf: keine Frage, nichts verändert, FPS-Ordner nicht als Kamera (\(sorter.folderStats.map(\.name)))")
+            check(Set(sorter.folderStats.map(\.name)) == ["A1", "B1"], "Kameraordner bleiben A1/B1")
+            check(TimelineModel.camera(of: fdreh.appendingPathComponent("A1/50 fps/Quer/F50.MP4")) == "A1", "Zeitleiste: Kamera A1, nicht „50 fps“")
+            store.ownCameraFolders = false; store.fpsMode = "off"
         }
 
         // 7) Weitere Ansichten
