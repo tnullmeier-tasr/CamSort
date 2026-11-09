@@ -45,6 +45,7 @@ final class TimelineModel: ObservableObject {
             guard let en = FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey],
                                                           options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
             while let u = en.nextObject() as? URL {
+                if u.lastPathComponent == FolderNames.checkFolder { en.skipDescendants(); continue }
                 if Sorter.videoExt.contains(u.pathExtension.lowercased()) { urls.append(u) }
             }
         }
@@ -71,7 +72,8 @@ final class TimelineModel: ObservableObject {
 
     /// Kamera = Ordner direkt unter „Videos“, sonst Elternordner
     nonisolated static func camera(of u: URL) -> String {
-        let c = u.pathComponents
+        // „Stabilisiert“ (neu: <Eltern>/Stabilisiert/<Ebene>, alt: <Ebene>/Stabilisiert) und „Original“ sind keine Kamera
+        let c = u.pathComponents.filter { !FolderNames.isStabilizedFolder($0) && $0 != FolderNames.legacyOriginal }
         if let i = c.lastIndex(where: FolderNames.isVideos), i + 1 < c.count - 1 {
             let n = c[i + 1].components(separatedBy: FolderNames.separator).first ?? c[i + 1]
             return ["Hochkant", "Quer", "Quadratisch", FolderNames.square, "Stand", "Fahrt", "Dazwischen", "Ohne GPS"].contains(n) || FolderNames.isFpsFolder(n) ? "Kamera" : n

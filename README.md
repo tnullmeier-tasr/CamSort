@@ -1,6 +1,6 @@
 # CamSort
 
-**CamSort sortiert Foto- und Videoordner auf dem Mac automatisch – nach Kamera, Ausrichtung und Dateityp. Auf Wunsch stabilisiert es Sony-Clips mit Gyroflow und trennt danach Stabilisiert und Original.** Dateien werden nur verschoben, nie verändert. Läuft komplett offline.
+**CamSort sortiert Foto- und Videoordner auf dem Mac automatisch – nach Kamera, Ausrichtung und Dateityp. Auf Wunsch stabilisiert es Sony-Clips mit Gyroflow und legt jeden fertigen Clip sofort in „Stabilisiert“ neben Hochkant/Quer – die Originale bleiben unverändert.** Dateien werden nur verschoben, nie verändert. Läuft komplett offline.
 
 ![CamSort nach dem Sortieren](docs/screenshot-fertig.png)
 
@@ -27,7 +27,7 @@
 | **Unterordner** | Optional werden auch Unterordner durchsucht; jede Datei wird dort einsortiert, wo sie liegt. |
 | **Nach Objektiv** | Optional: `Videos/<Kamera>/<Objektiv>/Hochkant|Quer` (zuverlässig bei Sony). |
 | **Drohne nach Geschwindigkeit** | Optional: Ø-Geschwindigkeit aus der SRT → `Stand`, `Fahrt`, `Dazwischen` oder `Ohne GPS`. Bereiche per Regler. |
-| **Gyroflow stabilisieren** | Nach dem Sortieren: *Sony-Clips mit Gyroflow stabilisieren*. Einzeln nacheinander, erst Hochkant, dann Quer, mit **Pause**. Nutzt dein Gyroflow-Preset – keine Codec-Rückfragen. Danach automatisch `Stabilisiert` / `Original` / `Gyroflow-Projekte`. Der Knopf lässt sich in den Einstellungen mit einem Schalter ausblenden. |
+| **Gyroflow stabilisieren** | Nach dem Sortieren: *Sony-Clips mit Gyroflow stabilisieren*. Einzeln nacheinander, erst Hochkant, dann Quer, mit **Pause**. Nutzt dein Gyroflow-Preset – keine Codec-Rückfragen. Jeder fertige Clip kommt **sofort** nach `Stabilisiert/<Ausrichtung>` neben Hochkant/Quer, Originale bleiben unverändert (siehe *Stabilisiert-Ordner*). Der Knopf lässt sich in den Einstellungen mit einem Schalter ausblenden. |
 | **Nur Gyroflow trennen** | Wer selbst in Gyroflow rendert: *Nur Gyroflow-Clips trennen*. Erkennt stabilisierte Dateien an Endungen wie `_gyro`, `_stabilized`, `_gyroflow` (einstellbar). |
 | **Hilfe** | Jede Einstellung hat ein **?**; das Buch-Symbol oben rechts öffnet die komplette Anleitung. |
 | **Farben** | Palette oben rechts: Farbschema oder eigene Hintergrundfarben. |
@@ -46,7 +46,7 @@ Alle Einstellungen und alles Gelernte bleiben nach einem Neustart erhalten.
 
 ## Neu ordnen bei geänderten Einstellungen
 Jeder kompakt sortierte Dreh bekommt eine unsichtbare Datei `.camsort-layout` (welche Einstellungen die Struktur bestimmt haben: Videos-Ordner, Ebenen, Reihenfolge, verschachtelt, Trennzeichen). Wird ein sortierter Ordner mit anderen Einstellungen erneut eingeworfen, fragt CamSort: „Dieser Ordner wurde mit anderen Einstellungen sortiert. Jetzt neu ordnen?“ – mit 1–2 Beispielpfaden Alt → Neu.
-- **Neu ordnen:** alle einsortierten Clips (inkl. `Stabilisiert`/`Original`, Gyroflow-Projekte wandern mit) werden in die neue Struktur verschoben – nur verschieben, nie überschreiben (Duplikat-Rückfrage wie immer). Die Kamera kommt aus dem bisherigen Ordner, es wird nicht neu gefragt. Leer gewordene Ebenen-Ordner werden entfernt. Final-Cut-Mediatheken im Dreh werden danach zum Neu-Verknüpfen angezeigt.
+- **Neu ordnen:** alle einsortierten Clips (inkl. `Stabilisiert`, Gyroflow-Projekte wandern mit; alte `Original`/`Stabilisiert`-Unterordner werden auf Wunsch ins neue Schema überführt) werden in die neue Struktur verschoben – nur verschieben, nie überschreiben (Duplikat-Rückfrage wie immer). Die Kamera kommt aus dem bisherigen Ordner, es wird nicht neu gefragt. Leer gewordene Ebenen-Ordner werden entfernt. Final-Cut-Mediatheken im Dreh werden danach zum Neu-Verknüpfen angezeigt.
 - **So lassen:** bisherige Struktur bleibt, nur neue Dateien werden einsortiert; für genau diese Einstellungen wird nicht erneut gefragt.
 - Drehs ohne `.camsort-layout` (ältere Läufe): CamSort leitet die Struktur aus den Ordnernamen ab; passt sie schon, wird nur die Datei geschrieben, sonst kommt die Frage „Mit aktuellen Einstellungen neu ordnen?“.
 - Nicht automatisch umgebaut wird zwischen kompaktem Modus und „Meine Kameraordner“ in Richtung Kameraordner.
@@ -152,10 +152,30 @@ Dein Ordner/
 ├── Videos/
 │   └── Sony Alpha 1/
 │       ├── Hochkant/
-│       └── Quer/
-│           ├── Stabilisiert/
-│           ├── Original/
+│       ├── Quer/
+│       └── Stabilisiert/
+│           ├── Hochkant/          C0002_stabilized.MP4
+│           ├── Quer/
 │           └── Gyroflow-Projekte/
 ├── Fotos/   Musik/   ZIP/   FCP/
 └── XML/     LRF/     SRT/
 ```
+
+## Stabilisiert-Ordner (Gyroflow)
+**Regel:** Der Ordner `Stabilisiert` (Name einstellbar unter *Einstellungen › Ordnernamen*) liegt im **Elternordner des letzten Ebenen-Ordners**; darunter derselbe Ordnername wie beim Original. Das Original bleibt bitgleich an seinem Platz und wird nie verschoben, ersetzt oder überschrieben. `.gyroflow`-Projekte kommen nach `<Eltern>/Stabilisiert/Gyroflow-Projekte/`.
+
+| Struktur | Original (bleibt) | Stabilisiert |
+|---|---|---|
+| Meine Kameraordner | `Pitbike/A1/Hochkant/C0001.MP4` | `Pitbike/A1/Stabilisiert/Hochkant/C0001_stabilized.MP4` |
+| Kompakt mit Videos-Ordner | `Dreh/Videos/Sony A1 · Quer/C0001.MP4` | `Dreh/Videos/Stabilisiert/Sony A1 · Quer/` |
+| Kompakt ohne Videos-Ordner | `Dreh/Sony A1 · Quer/C0001.MP4` | `Dreh/Stabilisiert/Sony A1 · Quer/` |
+| Verschachtelt mit FPS/Objektiv | `Dreh/Videos/Sony A1/Quer/50 fps/C0001.MP4` | `Dreh/Videos/Sony A1/Quer/Stabilisiert/50 fps/` |
+| Meine Kameraordner mit FPS | `Pitbike/A1/50 fps/Hochkant/C0001.MP4` | `Pitbike/A1/50 fps/Stabilisiert/Hochkant/` |
+| Projekte | `Projekt/Dreh/Videos/Sony A1/Hochkant/…` | `Projekt/Dreh/Videos/Sony A1/Stabilisiert/Hochkant/` |
+| Quadratisch | `Pitbike/Osmo/Quadratisch/DJI_0001.MP4` | `Pitbike/Osmo/Stabilisiert/Quadratisch/` |
+
+- **Sofort pro Clip:** Gyroflow rendert neben das Original (Name = Stamm + Suffix, Suffix nie leer, Standard `_stabilized`); direkt nach erfolgreichem Render (Exit 0, Datei da, > 0 Byte) wird die Datei mit dem sicheren Verschieben (Protokoll, gleiches Laufwerk, Größenprüfung, nie überschreiben) abgelegt. Gyroflows CLI kennt zwar `output_path` bzw. `output_folder` + `output_filename` in `-p` (src/cli.rs), aber `-p` wird nur in einer Preset-Variante übergeben und der Zielordner müsste außerhalb des Protokolls angelegt werden – deshalb neben dem Original rendern und sofort verschieben.
+- **Nie überschreiben:** Gibt es die stabilisierte Fassung schon (im Stabilisiert-Ordner oder neben dem Original), wird der Clip übersprungen. `-f` kann deshalb nur eine Teil-Ausgabe desselben Laufs ersetzen.
+- **Ausrichtung geprüft:** Die Ausgabegröße wird in angezeigter Ausrichtung übergeben (Gyroflow `set_output_size` vergleicht nach der Rotation). Ist das Ergebnis trotzdem anders ausgerichtet als das Original, landet es in `Stabilisiert/_Prüfen/`, und weitere Hochkant-Clips des Laufs werden mit dem kompletten Preset ohne Größenvorgabe gerendert.
+- **Rückgängig** legt die stabilisierten Dateien zurück neben das Original.
+- **Alte Struktur** (`Hochkant/Original`, `Hochkant/Stabilisiert`) gilt weiter als sortiert und wird nicht automatisch umgebaut; *Nur Gyroflow-Clips trennen* und *Neu ordnen* bieten an, sie umzustellen.

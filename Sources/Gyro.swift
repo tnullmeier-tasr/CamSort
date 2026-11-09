@@ -16,6 +16,12 @@ final class GyroRunner: ObservableObject {
     @Published var filePercent: Double = 0
     @Published var done: [String] = []
     @Published var errors: [String] = []
+    /// Je fertigem Clip: „C0001.MP4 → A1/Stabilisiert/Hochkant“
+    @Published var placed: [String] = []
+    /// Stabilisiert-Ordner, in die dieser Lauf abgelegt hat (Knopf „Im Finder zeigen“)
+    @Published var stabilizedDirs: [URL] = []
+    /// Übersprungen, weil die stabilisierte Fassung schon existiert (nie überschreiben)
+    @Published var skippedExisting = 0
 
     var active: Bool { state != .idle }
     var eta = ETA()
@@ -35,7 +41,8 @@ final class GyroRunner: ObservableObject {
     /// Log-Datei des zuletzt gescheiterten Clips (Knopf „Log zeigen“)
     @Published var lastLogURL: URL?
     /// Preset-Variante: reduziert (+ -p) oder – nach einem Fallback – komplett mit Ausgabegröße
-    enum PresetVariant { case reduced, full }
+    /// .plain = komplettes Original-Preset ohne Größenvorgabe (nach einer falsch ausgerichteten Ausgabe für Hochkant-Clips)
+    enum PresetVariant { case reduced, full, plain }
 
     init(store: LearnedStore, sorter: Sorter) { self.store = store; self.sorter = sorter }
 
@@ -75,7 +82,7 @@ final class GyroRunner: ObservableObject {
             while let u = en.nextObject() as? URL {
                 let name = u.lastPathComponent
                 if (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                    if ["Stabilisiert", "Original", "Gyroflow-Projekte"].contains(name) { en.skipDescendants() }
+                    if FolderNames.isGyroFolder(name) { en.skipDescendants() }
                     continue
                 }
                 guard Sorter.videoExt.contains(u.pathExtension.lowercased()) else { continue }
@@ -119,14 +126,27 @@ final class GyroRunner: ObservableObject {
     nonisolated static func hasStabilizedSibling(_ u: URL, suffixes: [String]) -> Bool {
         let dir = u.deletingLastPathComponent()
         let stem = u.deletingPathExtension().lastPathComponent.lowercased()
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        if names.contains(where: { n in
-            let s = (n as NSString).deletingPathExtension.lowercased()
-            return s != stem && s.hasPrefix(stem) && suffixes.contains { s.contains($0) }
-        }) { return true }
-        // schon getrennt: Original liegt in „Original“, Stabilisiert daneben
-        if dir.lastPathComponent == "Original" { return true }
+        func hasStab(in d: URL) -> Bool {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? []
+            return names.contains(where: { n in
+                let s = (n as NSString).deletingPathExtension.lowercased()
+                return s != stem && s.hasPrefix(stem) && suffixes.contains { s.contains($0) }
+            })
+        }
+        // a) selbst in Gyroflow gerendert: liegt (noch) neben dem Original
+        if hasStab(in: dir) { return true }
+        // b) neues Schema: <Eltern>/Stabilisiert/<Ebene>/
+        if hasStab(in: FolderNames.stabilizedDir(forClipDir: dir)) { return true }
+        // c) alte Logik: Original liegt in „Original“, Stabilisiert daneben
+        if dir.lastPathComponent == FolderNames.legacyOriginal { return true }
+        if hasStab(in: dir.appendingPathComponent(FolderNames.stabilized)) || hasStab(in: dir.appendingPathComponent("Stabilisiert")) { return true }
         return false
+    }
+
+    /// Suffix für Gyroflows Ausgabe (-t) – nie leer, sonst würde die Ausgabe wie das Original heißen
+    nonisolated static func safeSuffix(_ list: [String]) -> String {
+        let s = (list.first ?? "").trimmingCharacters(in: .whitespaces)
+        return s.isEmpty ? "_stabilized" : s
     }
 
     /// Hat der Clip Bewegungsdaten, die Gyroflow lesen kann? Erkennung wie telemetry-parser (Gyroflow):
@@ -202,7 +222,7 @@ final class GyroRunner: ObservableObject {
     private func start(folders: [URL], clips list: [URL]?) async {
         guard !preparing else { return }
         FolderNames.load()   // eigene Ordnernamen (Hochkant/Quer/Videos) für die Clip-Suche
-        errors = []; done = []; cancelled = false; pauseRequested = false
+        errors = []; done = []; placed = []; stabilizedDirs = []; skippedExisting = 0; cancelled = false; pauseRequested = false
         guard let app = appURL, let exe = executable(in: app) else {
             state = .failed("Gyroflow wurde nicht gefunden. Bitte unter Einstellungen › Gyroflow die Gyroflow-App auswählen.")
             return
@@ -315,8 +335,7 @@ final class GyroRunner: ObservableObject {
         }
     }
 
-    /// Gyroflow-Ausgabeparameter (-p) passend zum Clip: kodierte Größe (Gyroflow rechnet auf kodierten Pixeln und
-    /// übernimmt die Rotation selbst), gleiche Codec-Familie, Bitrate ≈ Quelle, Ton an (Original kopieren, sonst AAC).
+    /// Gyroflow-Ausgabeparameter (-p) passend zum Clip: ANGEZEIGTE Größe (nach Rotation), gleiche Codec-Familie, Bitrate ≈ Quelle, Ton an (Original kopieren, sonst AAC).
     /// Framerate: Gyroflow rendert immer mit der Quell-Framerate (kein -p-Schlüssel dafür nötig).
     nonisolated static func outputParams(for clip: URL) async -> String? {
         guard let p = await outputParamsDict(for: clip) else { return nil }
@@ -334,8 +353,12 @@ final class GyroRunner: ObservableObject {
     nonisolated static func outputParamsDict(for clip: URL) async -> [String: Any]? {
         let a = AVURLAsset(url: clip)
         guard let found = try? await a.loadTracks(withMediaType: .video), let t = found.first,
-              let props = try? await t.load(.naturalSize, .estimatedDataRate, .formatDescriptions) else { return nil }
-        let w = Int(abs(props.0.width).rounded()), h = Int(abs(props.0.height).rounded())
+              let props = try? await t.load(.naturalSize, .estimatedDataRate, .formatDescriptions),
+              let tf = try? await t.load(.preferredTransform) else { return nil }
+        // Gyroflow erwartet die Ausgabegröße in ANGEZEIGTER Ausrichtung: core/lib.rs set_output_size vergleicht mit
+        // params.size, bei video_rotation 90/270 mit getauschten Maßen (render_queue.rs: set_video_rotation((360 - info.rotation) % 360)).
+        // Kodierte Größe (3840×2160) bei einem Hochkant-Clip (Matrix 90°) ergab eine quer beschnittene Ausgabe.
+        let (w, h) = Self.displaySize(natural: props.0, transform: tf)
         guard w > 0, h > 0 else { return nil }
         var p: [String: Any] = ["output_width": w, "output_height": h, "audio": true, "audio_codec": "Copy"]
         let sub: FourCharCode = props.2.first.map { CMFormatDescriptionGetMediaSubType($0) } ?? 0
@@ -357,6 +380,17 @@ final class GyroRunner: ObservableObject {
             p["bitrate"] = Double(max(10, Int(mbps.rounded(.up))))
         }
         return p
+    }
+
+    /// Angezeigte Größe: naturalSize mit preferredTransform (Beträge) – bei 90°/270° Breite/Höhe getauscht.
+    /// So weiß auch CamSort „Hochkant“ (Sorter.videoProps): aus der Rotationsmatrix der Videospur – dieselbe Angabe, die Gyroflow
+    /// über ffmpeg als `rotation` liest. Gerade Maße (Encoder verlangen das).
+    nonisolated static func displaySize(natural: CGSize, transform: CGAffineTransform) -> (Int, Int) {
+        let r = natural.applying(transform)
+        var w = Int(abs(r.width).rounded()), h = Int(abs(r.height).rounded())
+        if w % 2 != 0 { w -= 1 }
+        if h % 2 != 0 { h -= 1 }
+        return (w, h)
     }
 
     /// Komplettes Original-Preset als Inline-JSON, nur die Ausgabegröße ersetzt. Inline, weil das Preset in apply_to_all
@@ -480,6 +514,9 @@ final class GyroRunner: ObservableObject {
     private func runAll(exe: URL, preset: String, originalPreset: String, hochkantCount: Int, folders: [URL]) async {
         var variant: PresetVariant = store.gyroMatchSource && preset != originalPreset ? .reduced : .full
         var fallbackTried = false
+        let suffix = Self.safeSuffix(store.gyroSuffixList)
+        var plainForPortrait = false
+        sorter?.beginGyroPlacement(folders: folders)
         while index < queue.count {
             if cancelled { break }
             while pauseRequested && !cancelled { try? await Task.sleep(nanoseconds: 300_000_000) }
@@ -488,12 +525,24 @@ final class GyroRunner: ObservableObject {
             currentGroup = index < hochkantCount ? "Hochkant" : "Quer"
             currentFile = clip.lastPathComponent
             filePercent = 0
-            var res = await render(exe: exe, clip: clip, preset: preset, originalPreset: originalPreset, variant: variant)
+            // Nie überschreiben: gibt es die stabilisierte Fassung schon (Stabilisiert-Ordner oder neben dem Original), Clip überspringen
+            let clipDir = clip.deletingLastPathComponent()
+            if let existing = Self.existingOutput(of: clip, suffix: suffix) {
+                skippedExisting += 1
+                let where_ = existing.deletingLastPathComponent().standardizedFileURL.path == clipDir.standardizedFileURL.path ? "neben dem Original" : Self.shortPath(existing.deletingLastPathComponent())
+                errors.append("Hinweis – \(clip.lastPathComponent): stabilisierte Fassung „\(existing.lastPathComponent)“ gibt es schon (\(where_)) – nicht neu gerendert, nichts überschrieben.")
+                index += 1
+                continue
+            }
+            let before = Set((try? FileManager.default.contentsOfDirectory(atPath: clipDir.path)) ?? [])
+            let isPortrait = index < hochkantCount
+            var res = await render(exe: exe, clip: clip, preset: preset, originalPreset: originalPreset,
+                                   variant: plainForPortrait && isPortrait ? .plain : variant, before: before)
             if cancelled { break }
             // Fallback: reduziertes Preset + -p gescheitert → EINMAL mit komplettem Original-Preset (nur Ausgabegröße) versuchen
-            if !res.ok && variant == .reduced && !fallbackTried {
+            if !res.ok && variant == .reduced && !fallbackTried && !(plainForPortrait && isPortrait) {
                 fallbackTried = true
-                let retry = await render(exe: exe, clip: clip, preset: preset, originalPreset: originalPreset, variant: .full)
+                let retry = await render(exe: exe, clip: clip, preset: preset, originalPreset: originalPreset, variant: .full, before: before)
                 if cancelled { break }
                 if retry.ok {
                     variant = .full
@@ -501,7 +550,32 @@ final class GyroRunner: ObservableObject {
                     errors.append("Hinweis – \(clip.lastPathComponent): Gyroflow akzeptierte die Ausgabe-Parameter nicht – mit komplettem Preset gerendert (gilt für den Rest des Laufs).")
                 }
             }
-            if res.ok { done.append(clip.lastPathComponent) } else { errors.append(res.message) }
+            // Ausrichtung des Ergebnisses prüfen: Hochkant-Clip darf nie als Quer-Clip (beschnitten) einsortiert werden
+            if res.ok, let out = res.outputs.first {
+                let want = await Self.videoOrientation(clip)
+                let got = await Self.videoOrientation(out)
+                if want != got {
+                    res.ok = false
+                    var msg = "\(clip.lastPathComponent): Ausgabe falsch ausgerichtet (\(got) statt \(want)) – nicht einsortiert"
+                    if let sorter, let q = await sorter.quarantineStabilized(res.outputs + res.projects, clipDir: clipDir) { msg += ", liegt in „\(Self.shortPath(q))“" }
+                    if want == FolderNames.portrait && !plainForPortrait {
+                        plainForPortrait = true
+                        msg += ". Weitere Hochkant-Clips dieses Laufs: komplettes Preset ohne Größenvorgabe."
+                    }
+                    res.message = msg
+                }
+            }
+            if res.ok {
+                done.append(clip.lastPathComponent)
+                // Sofort ablegen: <Eltern>/Stabilisiert/<Ebene>/ – über das sichere Verschieben mit Protokoll (Rückgängig möglich)
+                if let sorter, let dest = await sorter.placeStabilized(res.outputs, projects: res.projects, clipDir: clipDir) {
+                    placed.append("\(clip.lastPathComponent) → \(Self.shortPath(dest))")
+                    let stabRoot = dest.deletingLastPathComponent()
+                    if !stabilizedDirs.contains(stabRoot) { stabilizedDirs.append(stabRoot) }
+                } else {
+                    errors.append("\(clip.lastPathComponent): stabilisiert, aber nicht in „\(FolderNames.stabilized)“ verschoben – die Datei liegt neben dem Original (Details unter Hinweise).")
+                }
+            } else { errors.append(res.message) }
             index += 1
             // Nur Zusatzhinweis – die eigentliche App-Store-Erkennung läuft vor dem Start
             if !res.ok && done.isEmpty && index == 1 && fullOutput.lowercased().contains("not permitted") {
@@ -509,28 +583,52 @@ final class GyroRunner: ObservableObject {
             }
         }
         currentFile = ""
+        // Kein nachträgliches Trennen mehr: jeder Clip wurde schon direkt nach dem Rendern abgelegt, Originale bleiben, wo sie sind.
+        sorter?.endGyroPlacement(placedOriginals: queue.prefix(index).filter { done.contains($0.lastPathComponent) })
         if cancelled { state = .idle; return }
-        // Danach automatisch Stabilisiert / Original trennen und Ergebnis zeigen
-        if !done.isEmpty, let sorter {
-            sorter.folders = folders
-            sorter.startGyro()
-            sorter.hints.append("Gyroflow: \(done.count) von \(queue.count) Clips stabilisiert")
-            sorter.problems.append(contentsOf: errors)
-            state = .idle
-        } else {
-            state = .finished
-        }
+        if !done.isEmpty { sorter?.hints.append("Gyroflow: \(done.count) von \(queue.count) Clips stabilisiert – in „\(FolderNames.stabilized)“, Originale unverändert") }
+        state = .finished
     }
 
-    private func render(exe: URL, clip: URL, preset: String, originalPreset: String, variant: PresetVariant) async -> (ok: Bool, message: String) {
-        let suffix = store.gyroSuffixList.first ?? "_stabilized"
+    /// „A1/Stabilisiert/Hochkant“ – die letzten drei Ordner für die Anzeige
+    nonisolated static func shortPath(_ dir: URL) -> String {
+        dir.standardizedFileURL.pathComponents.suffix(3).joined(separator: "/")
+    }
+
+    /// Gibt es schon eine stabilisierte Fassung (Name = Stamm + Suffix + „.“) im Stabilisiert-Ordner oder neben dem Original?
+    nonisolated static func existingOutput(of clip: URL, suffix: String) -> URL? {
+        let dir = clip.deletingLastPathComponent()
+        let prefix = (clip.deletingPathExtension().lastPathComponent + suffix + ".").lowercased()
+        for d in [FolderNames.stabilizedDir(forClipDir: dir), dir] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? []
+            if let n = names.first(where: { $0.lowercased().hasPrefix(prefix) && $0.lowercased().hasSuffix(".gyroflow") == false }) {
+                return d.appendingPathComponent(n)
+            }
+        }
+        return nil
+    }
+
+    struct RenderResult { var ok: Bool; var message: String; var outputs: [URL] = []; var projects: [URL] = [] }
+
+    /// before: Dateinamen im Clip-Ordner VOR dem ersten Versuch (damit auch beim Fallback-Versuch alles Neue erkannt wird)
+    private func render(exe: URL, clip: URL, preset: String, originalPreset: String, variant: PresetVariant, before: Set<String>) async -> RenderResult {
+        // Suffix nie leer → Ausgabe heißt nie wie das Original (Gyroflow: Ausgabe = Ordner des Clips + Stamm + Suffix)
+        let suffix = Self.safeSuffix(store.gyroSuffixList)
+        let outDir = clip.deletingLastPathComponent()
+        let stem = clip.deletingPathExtension().lastPathComponent
+        guard !stem.lowercased().contains(suffix.lowercased()) else {
+            return RenderResult(ok: false, message: "\(clip.lastPathComponent): ist schon eine stabilisierte Fassung – übersprungen")
+        }
         let p = Process()
         p.executableURL = exe
         // Preset inline übergeben (Gyroflow liest dann keine Datei → kein „Reading preset file“-Panic)
         var presetArg = Self.presetInline(preset) ?? preset
         var note = "Preset: " + (preset as NSString).lastPathComponent
         var outParams: String? = nil
-        if store.gyroMatchSource {
+        if variant == .plain {
+            presetArg = Self.presetInline(originalPreset) ?? originalPreset
+            note = "Preset: " + (originalPreset as NSString).lastPathComponent + " (komplett, ohne Größenvorgabe)"
+        } else if store.gyroMatchSource {
             if variant == .reduced {
                 // Ausgabe wie Eingabeclip: Größe/Codec/Bitrate/Ton pro Clip über -p/--out-params (gyroflow src/cli.rs).
                 outParams = await Self.outputParams(for: clip)
@@ -541,6 +639,8 @@ final class GyroRunner: ObservableObject {
                 note = "Preset: " + (originalPreset as NSString).lastPathComponent + " (komplett, nur Ausgabegröße \(w)×\(h))"
             }
         }
+        // -f (overwrite) betrifft nur Gyroflows Ausgabedatei (cli.rs: Fehler „file_exists:“ des Render-Jobs). Vorher ist geprüft,
+        // dass es keine Datei „Stamm+Suffix.*“ gibt – -f kann also nur eine Teil-Ausgabe dieses Laufs (Fallback-Versuch) ersetzen.
         var args = [clip.path, "--preset", presetArg, "-t", suffix, "-f", "--stdout-progress"]
         if let json = outParams { args += ["-p", json] }
         p.arguments = args
@@ -555,7 +655,7 @@ final class GyroRunner: ObservableObject {
             Task { @MainActor in self?.handleOutput(s) }
         }
         do { try p.run() } catch {
-            return (false, "\(clip.lastPathComponent): Gyroflow konnte nicht gestartet werden (\(error.localizedDescription))")
+            return RenderResult(ok: false, message: "\(clip.lastPathComponent): Gyroflow konnte nicht gestartet werden (\(error.localizedDescription))")
         }
         process = p
         while p.isRunning { try? await Task.sleep(nanoseconds: 250_000_000) }
@@ -565,21 +665,37 @@ final class GyroRunner: ObservableObject {
         let rest = await Task.detached { () -> Data in reader.readDataToEndOfFile() }.value
         if !rest.isEmpty { handleOutput(String(decoding: rest, as: UTF8.self)) }
         process = nil
-        if cancelled { return (false, "") }
-        let out = clip.deletingLastPathComponent()
-        let stem = clip.deletingPathExtension().lastPathComponent
-        let produced = ((try? FileManager.default.contentsOfDirectory(atPath: out.path)) ?? [])
-            .contains { $0.hasPrefix(stem + suffix) }
+        if cancelled { return RenderResult(ok: false, message: "") }
+        let found = Self.newOutputs(in: outDir, before: before, clip: clip, suffix: suffix)
+        let produced = !found.videos.isEmpty
         let status = p.terminationStatus
         let log = Self.writeLog(clip: clip, exe: exe, args: args, output: fullOutput, status: status, note: note)
-        if status == 0 && produced { filePercent = 1; return (true, "") }
+        if status == 0 && produced { filePercent = 1; return RenderResult(ok: true, message: "", outputs: found.videos, projects: found.projects) }
         if let log { lastLogURL = log }
         var lines = Self.meaningfulLines(fullOutput)
         if status == 0 && !produced { lines.append("keine Ausgabedatei „\(stem + suffix)…“ entstanden") }
         let panic = status == 101 ? " – Gyroflow ist abgestürzt (Rust-Panic)" : ""
         let detail = lines.isEmpty ? " – keine Fehlermeldung von Gyroflow" : " – " + lines.joined(separator: " | ")
         let logNote = log.map { " (Log: \($0.lastPathComponent))" } ?? ""
-        return (false, "\(clip.lastPathComponent): Gyroflow-Fehler (Code \(status))\(panic)\(detail)\(logNote)")
+        return RenderResult(ok: false, message: "\(clip.lastPathComponent): Gyroflow-Fehler (Code \(status))\(panic)\(detail)\(logNote)")
+    }
+
+    /// Was Gyroflow für diesen Clip neu erzeugt hat: Video „Stamm+Suffix.*“ (nicht leer, nie das Original) und ggf. .gyroflow-Projekt
+    nonisolated static func newOutputs(in dir: URL, before: Set<String>, clip: URL, suffix: String) -> (videos: [URL], projects: [URL]) {
+        let fm = FileManager.default
+        let stem = clip.deletingPathExtension().lastPathComponent.lowercased()
+        let prefix = (stem + suffix + ".").lowercased()
+        let now = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+        var v: [URL] = [], g: [URL] = []
+        for n in now where !before.contains(n) && n != clip.lastPathComponent {
+            let low = n.lowercased()
+            let u = dir.appendingPathComponent(n)
+            if low.hasSuffix(".gyroflow") && low.hasPrefix(stem) { g.append(u); continue }
+            guard low.hasPrefix(prefix), Sorter.videoExt.contains(u.pathExtension.lowercased()) else { continue }
+            let size = ((try? fm.attributesOfItem(atPath: u.path))?[.size] as? NSNumber)?.int64Value ?? 0
+            if size > 0 && u.standardizedFileURL.path != clip.standardizedFileURL.path { v.append(u) }
+        }
+        return (v.sorted { $0.path < $1.path }, g.sorted { $0.path < $1.path })
     }
 
     private func handleOutput(_ s: String) {
@@ -618,7 +734,7 @@ final class GyroRunner: ObservableObject {
         pauseRequested = false
     }
 
-    func close() { state = .idle; queue = []; errors = []; done = []; lastLogURL = nil }
+    func close() { state = .idle; queue = []; errors = []; done = []; placed = []; stabilizedDirs = []; skippedExisting = 0; lastLogURL = nil }
 }
 
 // MARK: - Ansicht
@@ -656,9 +772,10 @@ struct GyroView: View {
                     ProgressView(value: gyro.filePercent).tint(Theme.orange).frame(maxWidth: 300)
                     Label(gyro.state == .paused ? "pausiert" : gyro.remainingText, systemImage: "clock")
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.mint)
-                    Text("Clips werden einzeln nacheinander gerendert – erst Hochkant, dann Quer.")
-                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                    Text("Clips werden einzeln nacheinander gerendert – erst Hochkant, dann Quer. Jeder fertige Clip kommt sofort nach „\(FolderNames.stabilized)“, die Originale bleiben, wo sie sind.")
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).multilineTextAlignment(.center)
                 }
+                if !gyro.placed.isEmpty { GyroPlacedList(lines: gyro.placed) }
                 HStack(spacing: 12) {
                     Button { gyro.state == .paused ? gyro.resume() : gyro.pause() } label: {
                         Label(gyro.state == .paused ? "Fortsetzen" : "Pause",
@@ -674,8 +791,22 @@ struct GyroView: View {
                 }
                 .font(.system(size: 14, weight: .semibold))
             case .finished:
-                Text("Gyroflow ist fertig – \(gyro.done.count) von \(gyro.queue.count) Clips stabilisiert.")
-                    .font(.system(size: 15, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
+                VStack(spacing: 10) {
+                    Text(gyro.placed.isEmpty
+                         ? "Gyroflow ist fertig – \(gyro.done.count) von \(gyro.queue.count) Clips stabilisiert."
+                         : "\(gyro.placed.count) \(gyro.placed.count == 1 ? "Clip" : "Clips") stabilisiert – in „\(FolderNames.stabilized)“ neben Hochkant/Quer; Originale unverändert")
+                        .font(.system(size: 15, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
+                    if gyro.skippedExisting > 0 {
+                        Text("\(gyro.skippedExisting) übersprungen – stabilisierte Fassung gab es schon (nichts überschrieben)")
+                            .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                    }
+                    if !gyro.placed.isEmpty { GyroPlacedList(lines: gyro.placed) }
+                    if !gyro.stabilizedDirs.isEmpty {
+                        Button { NSWorkspace.shared.activateFileViewerSelecting(gyro.stabilizedDirs) } label: {
+                            Label("Im Finder zeigen", systemImage: "folder")
+                        }.buttonStyle(.bordered)
+                    }
+                }
             case .failed(let msg):
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 30)).foregroundStyle(Theme.orange)
@@ -708,6 +839,23 @@ struct GyroView: View {
                 }.buttonStyle(.plain)
             }
         }
+    }
+}
+
+/// Liste „C0001.MP4 → A1/Stabilisiert/Hochkant“ (neueste unten)
+struct GyroPlacedList: View {
+    let lines: [String]
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                    Text(l).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.mint)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 90).padding(8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.mint.opacity(0.08)))
     }
 }
 

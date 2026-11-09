@@ -60,6 +60,8 @@ final class SelectsRunner: ObservableObject {
         var all: [URL] = []
         guard let en = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
         while let u = en.nextObject() as? URL {
+            // falsch ausgerichtete Gyroflow-Ausgaben (Stabilisiert/_Prüfen) und Projektdateien nie verwenden
+            if u.lastPathComponent == FolderNames.checkFolder || u.lastPathComponent == FolderNames.gyroProjects { en.skipDescendants(); continue }
             if Sorter.videoExt.contains(u.pathExtension.lowercased()), FolderNames.isSortedVideoPath(u.pathComponents) { all.append(u) }
         }
         func isStab(_ u: URL) -> Bool { let s = u.deletingPathExtension().lastPathComponent.lowercased(); return suffixes.contains { s.contains($0) } }

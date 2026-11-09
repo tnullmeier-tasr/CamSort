@@ -486,7 +486,7 @@ struct IdleView: View {
                     }
                     .buttonStyle(.plain)
                     HelpButton(title: "Nur Gyroflow-Clips trennen",
-                               text: "Für den Fall, dass du die Clips nach dem Sortieren selbst in Gyroflow gerendert hast: CamSort sortiert nichts Neues ein, sondern trennt nur in jedem Ordner, in dem Gyroflow etwas erzeugt hat, nach „Stabilisiert“ (Dateiname enthält z. B. _gyro oder _stabilized), „Original“ und „Gyroflow-Projekte“. Die Endungen stellst du unter Einstellungen › Gyroflow ein.\n\n„Aktualisieren“ macht dasselbe automatisch mit – sortiert aber zusätzlich neue Dateien ein.")
+                               text: "Für den Fall, dass du die Clips nach dem Sortieren selbst in Gyroflow gerendert hast: CamSort legt nur die stabilisierten Dateien (Dateiname enthält z. B. _gyro oder _stabilized) und die .gyroflow-Projekte in den Ordner „Stabilisiert“ neben Hochkant/Quer – z. B. A1/Hochkant/C0001_stabilized.MP4 → A1/Stabilisiert/Hochkant/. Die Originale bleiben, wo sie sind. Die Endungen stellst du unter Einstellungen › Gyroflow ein.\n\nGibt es noch die alte Aufteilung (Hochkant/Original, Hochkant/Stabilisiert), fragt CamSort, ob sie umgestellt werden soll – nur auf deine Bestätigung.\n\n„Aktualisieren“ macht dasselbe automatisch mit – sortiert aber zusätzlich neue Dateien ein.")
                 }
                 .transition(.opacity)
             }
@@ -701,7 +701,7 @@ struct DoneView: View {
                                 .frame(maxWidth: .infinity).frame(height: 40)
                                 .background(RoundedRectangle(cornerRadius: 12).fill(Theme.mint.opacity(0.35)))
                         }.buttonStyle(.plain)
-                        HelpButton(title: "Gyrodaten erkannt", text: "CamSort hat in diesen Clips Bewegungsdaten gefunden, die Gyroflow lesen kann (Sony, DJI mit eingebetteten Gyrodaten wie Avata/Action, GoPro, Insta360). Schon stabilisierte Clips und Clips, zu denen es schon eine stabilisierte Fassung gibt, sind nicht dabei. Gyroflow rendert erst alle Hochkant-, dann alle Quer-Clips; die Ergebnisse landen neben dem Original und werden danach in „Stabilisiert“ / „Original“ getrennt. 4:3-Clips behalten auf Wunsch ihr Format (Einstellungen › Gyroflow).")
+                        HelpButton(title: "Gyrodaten erkannt", text: "CamSort hat in diesen Clips Bewegungsdaten gefunden, die Gyroflow lesen kann (Sony, DJI mit eingebetteten Gyrodaten wie Avata/Action, GoPro, Insta360). Schon stabilisierte Clips und Clips, zu denen es schon eine stabilisierte Fassung gibt, sind nicht dabei. Gyroflow rendert erst alle Hochkant-, dann alle Quer-Clips; jeder fertige Clip kommt sofort in den Ordner „Stabilisiert“ neben Hochkant/Quer (z. B. A1/Stabilisiert/Hochkant). Die Originale bleiben unverändert an ihrem Platz und werden nie überschrieben. 4:3-Clips behalten auf Wunsch ihr Format (Einstellungen › Gyroflow).")
                     }
                 }
                 .padding(12)
@@ -747,7 +747,7 @@ struct DoneView: View {
                             .foregroundStyle(Theme.mint)
                     }.buttonStyle(.plain)
                     HelpButton(title: "Mit Gyroflow stabilisieren",
-                               text: "Schickt alle noch nicht stabilisierten Sony-Clips aus den Ordnern Hochkant und Quer an Gyroflow – einzeln nacheinander, zuerst alle Hochkant-, dann alle Quer-Clips. Gyroflow arbeitet dabei im Hintergrund mit deinem hinterlegten Preset (Einstellungen › Gyroflow). Du kannst jederzeit pausieren oder abbrechen. Wenn Gyroflow fertig ist, trennt CamSort automatisch in „Stabilisiert“ und „Original“.")
+                               text: "Schickt alle noch nicht stabilisierten Sony-Clips aus den Ordnern Hochkant und Quer an Gyroflow – einzeln nacheinander, zuerst alle Hochkant-, dann alle Quer-Clips. Gyroflow arbeitet dabei im Hintergrund mit deinem hinterlegten Preset (Einstellungen › Gyroflow). Du kannst jederzeit pausieren oder abbrechen. Jeder fertige Clip kommt sofort in „Stabilisiert“ neben Hochkant/Quer (z. B. A1/Stabilisiert/Hochkant/C0001_stabilized.MP4); die Originale bleiben unverändert, wo sie sind. Gibt es die stabilisierte Fassung schon, wird der Clip übersprungen – nie überschrieben. Ist das Ergebnis anders ausgerichtet als das Original (Hochkant/Quer), landet es zur Prüfung in „Stabilisiert/_Prüfen“.")
                 }
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
@@ -1285,7 +1285,7 @@ struct SettingsView: View {
                     }
 
                     section("Gyroflow")
-                    WithHelp(title: "Gyroflow-Option anzeigen", text: "An: Nach dem Sortieren erscheint der Knopf „Sony-Clips mit Gyroflow stabilisieren“.\nAus: Der Knopf wird ausgeblendet – praktisch, wenn du Gyroflow lieber selbst bedienst oder gar nicht nutzt. Das Trennen in Stabilisiert/Original funktioniert trotzdem.") {
+                    WithHelp(title: "Gyroflow-Option anzeigen", text: "An: Nach dem Sortieren erscheint der Knopf „Sony-Clips mit Gyroflow stabilisieren“.\nAus: Der Knopf wird ausgeblendet – praktisch, wenn du Gyroflow lieber selbst bedienst oder gar nicht nutzt. Das Ablegen selbst gerenderter Clips in „Stabilisiert“ funktioniert trotzdem.") {
                         Toggle("Gyroflow-Knopf nach dem Sortieren anzeigen", isOn: $store.showGyroButton.animation())
                     }
                     GyroPresetBox()
@@ -1306,7 +1306,7 @@ struct SettingsView: View {
                             }.controlSize(.small)
                         }
                     }
-                    WithHelp(title: "Automatisch trennen", text: "Bei jedem Sortier-Durchlauf schaut CamSort zusätzlich nach, ob Gyroflow irgendwo stabilisierte Clips erzeugt hat, und trennt dort in „Stabilisiert“, „Original“ und „Gyroflow-Projekte“. Ordner ohne stabilisierte Clips bleiben unverändert.") {
+                    WithHelp(title: "Automatisch trennen", text: "Bei jedem Sortier-Durchlauf schaut CamSort zusätzlich nach, ob Gyroflow irgendwo stabilisierte Clips neben die Originale gelegt hat, und verschiebt nur diese (+ .gyroflow-Projekte) in „Stabilisiert“ neben Hochkant/Quer. Originale bleiben liegen.") {
                         Toggle("Gyroflow-Clips automatisch trennen", isOn: $store.autoGyro)
                     }
                     WithHelp(title: "Endungen stabilisierter Dateien", text: "Daran erkennt CamSort, welche Clips von Gyroflow stammen: Enthält der Dateiname eine dieser Endungen, gilt er als stabilisiert. Mehrere Endungen mit Komma trennen. Die erste Endung verwendet CamSort auch selbst, wenn es Gyroflow rendern lässt.") {
@@ -1538,6 +1538,7 @@ struct FolderNamingEditor: View {
     @AppStorage("fnSide") private var side = "Begleitdateien"
     @AppStorage("fnExtras") private var extras = "Extras"
     @AppStorage("fnSquare") private var square = "Quadratisch"
+    @AppStorage("fnStabilized") private var stabilizedName = "Stabilisiert"
     @AppStorage("fnFps") private var fpsTemplate = "{n} fps"
     @AppStorage("fnSeparator") private var separator = " · "
     @AppStorage("fnShowCamera") private var showCamera = true
@@ -1570,6 +1571,7 @@ struct FolderNamingEditor: View {
                     GridRow { Text("Begleitdateien").font(.system(size: 11)); TextField("Begleitdateien", text: $side) }
                     GridRow { Text("Extras").font(.system(size: 11)); TextField("Extras", text: $extras) }
                     GridRow { Text("Quadratisch").font(.system(size: 11)); TextField("Quadratisch", text: $square) }
+                    GridRow { Text("Stabilisiert").font(.system(size: 11)); TextField("Stabilisiert", text: $stabilizedName) }
                     GridRow { Text("Framerate").font(.system(size: 11)); TextField("{n} fps", text: $fpsTemplate) }
                 }
                 .textFieldStyle(.roundedBorder).controlSize(.small)

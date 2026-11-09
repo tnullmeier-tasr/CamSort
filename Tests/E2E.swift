@@ -155,11 +155,18 @@ struct E2E {
         try? FileManager.default.copyItem(at: q.appendingPathComponent("C0001.MP4"), to: q.appendingPathComponent("C0001_gyro.mp4"))
         try? "{}".write(to: q.appendingPathComponent("C0001.gyroflow"), atomically: true, encoding: .utf8)
         sorter.folders = [root]
+        func sha(_ u: URL) -> String { (try? Data(contentsOf: u)).map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "-" }
+        let origHash = sha(q.appendingPathComponent("C0001.MP4"))
         sorter.startGyro()
-        while sorter.phase != .done && sorter.phase != .cancelled { try? await Task.sleep(nanoseconds: 50_000_000) }
-        check(FileManager.default.fileExists(atPath: q.appendingPathComponent("Stabilisiert/C0001_gyro.mp4").path), "Gyroflow-Datei _gyro → Stabilisiert/")
-        check(FileManager.default.fileExists(atPath: q.appendingPathComponent("Original/C0001.MP4").path), "Original → Original/")
-        check(FileManager.default.fileExists(atPath: q.appendingPathComponent("Gyroflow-Projekte/C0001.gyroflow").path), ".gyroflow → Gyroflow-Projekte/")
+        while sorter.phase != .done && sorter.phase != .cancelled {
+            if sorter.pendingQuestion != nil { sorter.answerQuestion("no", remember: false) }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let stabQ = root.appendingPathComponent("Videos/Sony Alpha 1/Stabilisiert/Quer")
+        check(FileManager.default.fileExists(atPath: stabQ.appendingPathComponent("C0001_gyro.mp4").path), "Selbst gerendert: _gyro → Sony Alpha 1/Stabilisiert/Quer/")
+        check(sha(q.appendingPathComponent("C0001.MP4")) == origHash, "Original bleibt bitgleich in Quer/ (nicht nach „Original“)")
+        check(FileManager.default.fileExists(atPath: root.appendingPathComponent("Videos/Sony Alpha 1/Stabilisiert/Gyroflow-Projekte/C0001.gyroflow").path), ".gyroflow → Stabilisiert/Gyroflow-Projekte/")
+        check(GyroRunner.hasStabilizedSibling(q.appendingPathComponent("C0001.MP4"), suffixes: store.gyroSuffixList), "Stabilisierte Fassung im neuen Ort wird erkannt")
         check(FileManager.default.fileExists(atPath: root.appendingPathComponent("Videos/Sony ZV-E1/Hochkant/C0002.MP4").path),
               "Ordner ohne Gyroflow-Clips bleiben unverändert")
         render(DoneView(), "04-fertig-gyroflow-getrennt")
@@ -550,7 +557,7 @@ struct E2E {
                   && store.hasDateInName("Pitbike 12.10.") && !store.hasDateInName("Pitbike") && !store.hasDateInName("A1"), "Datum im Ordnernamen wird erkannt")
             let dreh = root.deletingLastPathComponent().appendingPathComponent("Pitbike Ä 🏍")
             try? fmx.removeItem(at: dreh)
-            let quer = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")
+            let quer = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/C0001.MP4")
             let hoch = root.appendingPathComponent("Videos/Sony ZV-E1/Hochkant/C0002.MP4")
             let clip = dreh.appendingPathComponent("A1/PRIVATE/M4ROOT/CLIP")
             let dji = dreh.appendingPathComponent("Avata/DCIM/100MEDIA")
@@ -682,6 +689,79 @@ struct E2E {
             check(Set(sorter.folderStats.map(\.name)) == ["A1", "B1"], "Kameraordner bleiben A1/B1")
             check(TimelineModel.camera(of: fdreh.appendingPathComponent("A1/50 fps/Quer/F50.MP4")) == "A1", "Zeitleiste: Kamera A1, nicht „50 fps“")
             store.ownCameraFolders = false; store.fpsMode = "off"
+
+            // 6b') Bereits sortierter Ordner, keine neuen Clips: mehrere Frameraten → Frage, „Ja“ ordnet um, danach Ruhe
+            let odreh = root.deletingLastPathComponent().appendingPathComponent("CamSort-FPS-Alt")
+            try? fmx.removeItem(at: odreh)
+            let oa = odreh.appendingPathComponent("A1/Quer")
+            try? fmx.createDirectory(at: oa, withIntermediateDirectories: true)
+            for n in ["F25", "F50"] { try? fmx.copyItem(at: x.appendingPathComponent("\(n).MP4"), to: oa.appendingPathComponent("\(n).MP4")) }
+            let os = odreh.appendingPathComponent("A1/Stabilisiert/Quer")
+            try? fmx.createDirectory(at: os, withIntermediateDirectories: true)
+            try? fmx.copyItem(at: x.appendingPathComponent("F50.MP4"), to: os.appendingPathComponent("F50_stabilized.MP4"))
+            store.ownCameraFolders = true; store.fpsMode = "ask"
+            var existingAsked = 0
+            func runO(_ answer: String) async {
+                sorter.reset(); sorter.addFolders([odreh]); sorter.start()
+                let t0 = Date()
+                while sorter.phase != .done && sorter.phase != .cancelled && Date().timeIntervalSince(t0) < 120 {
+                    if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                    if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                    if let q = sorter.pendingQuestion {
+                        if q.title.contains("Framerate") { existingAsked += 1; sorter.answerQuestion(answer, remember: false) }
+                        else { sorter.answerQuestion("off", remember: false) }
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            await runO("yes")
+            func exO(_ p: String) -> Bool { fmx.fileExists(atPath: odreh.appendingPathComponent(p).path) }
+            check(existingAsked == 1, "Schon sortiert, mehrere Frameraten → Frage kommt auch ohne neue Clips")
+            check(exO("A1/25 fps/Quer/F25.MP4") && exO("A1/50 fps/Quer/F50.MP4"), "„Ja“ → bestehende Clips in 25 fps/50 fps verschoben")
+            check(exO("A1/50 fps/Stabilisiert/Quer/F50_stabilized.MP4"), "Stabilisiert wandert mit (A1/50 fps/Stabilisiert/Quer)")
+            let treeO = ((try? fmx.subpathsOfDirectory(atPath: odreh.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            await runO("yes")
+            let treeO2 = ((try? fmx.subpathsOfDirectory(atPath: odreh.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            check(existingAsked == 1 && treeO == treeO2, "Danach: keine erneute Frage, nichts verändert")
+            store.ownCameraFolders = false; store.fpsMode = "off"
+        }
+
+        // 6b'') Gyroflow-Render simuliert: sofort nach Stabilisiert/<Ebene>, Original bitgleich, kein erneutes Angebot, Rückgängig
+        do {
+            let fmx = FileManager.default
+            check(GyroRunner.displaySize(natural: CGSize(width: 3840, height: 2160), transform: CGAffineTransform(rotationAngle: .pi / 2)) == (2160, 3840),
+                  "Ausgabegröße: Matrix 90° → angezeigte Maße 2160×3840 (getauscht)")
+            check(GyroRunner.displaySize(natural: CGSize(width: 3840, height: 2160), transform: .identity) == (3840, 2160), "Ausgabegröße ohne Rotation unverändert")
+            check(GyroRunner.safeSuffix([]) == "_stabilized" && GyroRunner.safeSuffix(["  "]) == "_stabilized" && GyroRunner.safeSuffix(["_gyro"]) == "_gyro", "Suffix nie leer")
+            let gd = root.deletingLastPathComponent().appendingPathComponent("CamSort-Gyro/Pitbike/A1/Hochkant")
+            try? fmx.removeItem(at: gd.deletingLastPathComponent().deletingLastPathComponent())
+            try? fmx.createDirectory(at: gd, withIntermediateDirectories: true)
+            let orig = gd.appendingPathComponent("C0001.MP4")
+            try? fmx.copyItem(at: root.appendingPathComponent("Videos/Sony ZV-E1/Hochkant/C0002.MP4"), to: orig)
+            func sha(_ u: URL) -> String { (try? Data(contentsOf: u)).map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "-" }
+            let h0 = sha(orig)
+            check(FolderNames.stabilizedDir(forClipDir: gd).path.hasSuffix("Pitbike/A1/Stabilisiert/Hochkant"), "Regel: A1/Hochkant → A1/Stabilisiert/Hochkant")
+            check(FolderNames.stabilizedDir(forClipDir: URL(fileURLWithPath: "/D/Videos/Sony A1 · Quer")).path == "/D/Videos/Stabilisiert/Sony A1 · Quer", "Regel kompakt: Videos/Sony A1 · Quer → Videos/Stabilisiert/Sony A1 · Quer")
+            let before = Set((try? fmx.contentsOfDirectory(atPath: gd.path)) ?? [])
+            // „Gyroflow“ erzeugt Ausgabe + Projekt neben dem Original
+            try? fmx.copyItem(at: orig, to: gd.appendingPathComponent("C0001_stabilized.MP4"))
+            try? "{}".write(to: gd.appendingPathComponent("C0001.gyroflow"), atomically: true, encoding: .utf8)
+            let found = GyroRunner.newOutputs(in: gd, before: before, clip: orig, suffix: "_stabilized")
+            check(found.videos.map(\.lastPathComponent) == ["C0001_stabilized.MP4"] && found.projects.count == 1, "Neue Ausgabe erkannt, Original nie als Ausgabe")
+            sorter.reset()
+            sorter.beginGyroPlacement(folders: [gd.deletingLastPathComponent().deletingLastPathComponent()])
+            let dest = await sorter.placeStabilized(found.videos, projects: found.projects, clipDir: gd)
+            sorter.endGyroPlacement(placedOriginals: [orig])
+            let stabFile = gd.deletingLastPathComponent().appendingPathComponent("Stabilisiert/Hochkant/C0001_stabilized.MP4")
+            check(dest != nil && fmx.fileExists(atPath: stabFile.path), "Gerenderter Clip sofort in A1/Stabilisiert/Hochkant")
+            check(fmx.fileExists(atPath: gd.deletingLastPathComponent().appendingPathComponent("Stabilisiert/Gyroflow-Projekte/C0001.gyroflow").path), ".gyroflow → A1/Stabilisiert/Gyroflow-Projekte")
+            check(sha(orig) == h0, "Original bitgleich am alten Ort (SHA256)")
+            check(GyroRunner.existingOutput(of: orig, suffix: "_stabilized") != nil, "Vorhandene Fassung → wird nicht neu gerendert (nie überschreiben)")
+            let again = await GyroRunner.collectGyroClips(in: [gd.deletingLastPathComponent().deletingLastPathComponent()], suffixes: store.gyroSuffixList + ["_stabilized"])
+            check(!(again.hochkant + again.quer).contains { $0.lastPathComponent == "C0001.MP4" }, "Zweiter Lauf bietet den Clip nicht erneut an")
+            sorter.undoLastRun()
+            check(fmx.fileExists(atPath: gd.appendingPathComponent("C0001_stabilized.MP4").path) && !fmx.fileExists(atPath: stabFile.path) && sha(orig) == h0,
+                  "Rückgängig: stabilisierte Datei wieder neben dem Original, Original unverändert")
         }
 
         // 6b) Projekte trennen bei langer Drehpause

@@ -254,7 +254,7 @@ final class Sorter: ObservableObject {
     nonisolated static let projectExt: Set<String> = ["fcpbundle", "fcpxml", "fcpxmld", "fcpxd"]
     nonisolated static let sideExt: Set<String> = ["gyroflow", "xml", "lrf", "srt", "thm", "aae", "xmp", "bim", "lrv"]
     nonisolated static let alwaysIgnore: Set<String> = ["ds_store", "db", "ini", "localized"]
-    static var fixedOutput: Set<String> { FolderNames.outputNames.union(["Musik", "ZIP", "FCP", "Hochkant", "Quer", "Quadratisch", FolderNames.square, "Stabilisiert", "Original", "Gyroflow-Projekte"]) }
+    static var fixedOutput: Set<String> { FolderNames.outputNames.union(["Musik", "ZIP", "FCP", "Hochkant", "Quer", "Quadratisch", FolderNames.square, "Stabilisiert", FolderNames.stabilized, FolderNames.legacyOriginal, FolderNames.gyroProjects]) }
 
     private var dupForAll: DupChoice?
     @Published var skipAsking = false   // „Lernen überspringen“ für diesen Durchlauf
@@ -665,14 +665,18 @@ final class Sorter: ObservableObject {
         }
     }
 
+    /// Selbst in Gyroflow gerenderte Clips (Suffix, liegen neben dem Original) nach <Eltern>/Stabilisiert/<Ebene>/ legen.
+    /// Originale werden NIE verschoben. Alte Ordner „Original“/„Stabilisiert“ unter der Ebene gelten als sortiert
+    /// (übersprungen); nur „Nur Gyroflow-Clips trennen“ bietet auf Nachfrage an, sie ins neue Schema zu überführen.
     private func runGyro(auto: Bool) async {
+        FolderNames.load()
         let suffixes = cfg.gyroSuffixList
         func isStabilized(_ u: URL) -> Bool {
             let stem = u.deletingPathExtension().lastPathComponent.lowercased()
             return suffixes.contains { stem.contains($0) }
         }
-        let skipDirs: Set<String> = ["Stabilisiert", "Original", "Gyroflow-Projekte"]
         var byDir: [URL: [URL]] = [:]
+        var legacyDirs: [URL] = []   // Ebenen-Ordner mit alten Unterordnern „Original“/„Stabilisiert“
         for base in folders {
             guard let en = fm.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                                          options: [.skipsHiddenFiles, .skipsPackageDescendants]) else {
@@ -681,7 +685,11 @@ final class Sorter: ObservableObject {
             while let u = en.nextObject() as? URL {
                 let v = try? u.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
                 if v?.isDirectory == true {
-                    if skipDirs.contains(u.lastPathComponent) { en.skipDescendants() }
+                    let n = u.lastPathComponent
+                    if FolderNames.isGyroFolder(n) {
+                        en.skipDescendants()
+                        if n == FolderNames.legacyOriginal { let l = u.deletingLastPathComponent(); if !legacyDirs.contains(l) { legacyDirs.append(l) } }
+                    }
                     continue
                 }
                 guard v?.isRegularFile == true else { continue }
@@ -689,19 +697,47 @@ final class Sorter: ObservableObject {
                 if Self.videoExt.contains(ext) || ext == "gyroflow" { byDir[u.deletingLastPathComponent(), default: []].append(u) }
             }
         }
-        // Nur Ordner, in denen Gyroflow wirklich etwas erzeugt hat
-        var jobs: [(URL, String)] = []
+        // Nur Ordner, in denen Gyroflow wirklich etwas erzeugt hat – und davon NUR die stabilisierten Dateien (+ .gyroflow)
+        var jobs: [(URL, URL)] = []
         var untouched = 0
-        for (_, files) in byDir {
+        for (dir, files) in byDir {
             let videos = files.filter { $0.pathExtension.lowercased() != "gyroflow" }
             guard videos.contains(where: isStabilized) else {
                 if !videos.isEmpty { untouched += 1 }
                 continue
             }
             for f in files {
-                let target = f.pathExtension.lowercased() == "gyroflow" ? "Gyroflow-Projekte"
-                           : isStabilized(f) ? "Stabilisiert" : "Original"
-                jobs.append((f, target))
+                if f.pathExtension.lowercased() == "gyroflow" { jobs.append((f, FolderNames.stabilizedProjectsDir(forClipDir: dir))) }
+                else if isStabilized(f) { jobs.append((f, FolderNames.stabilizedDir(forClipDir: dir))) }
+                // Originale bleiben liegen
+            }
+        }
+        // Alte Struktur (vor 2026-11) nur auf Bestätigung umstellen
+        if !auto && !legacyDirs.isEmpty {
+            let ex = legacyDirs[0]
+            let q = PreRunQuestion(
+                key: "gyro-migrate", title: "Alte Gyroflow-Ordner umstellen?",
+                message: "\(plural(legacyDirs.count, "Ordner hat", "Ordner haben")) noch die alte Aufteilung „\(FolderNames.legacyOriginal)“/„\(FolderNames.stabilized)“ unter der Ausrichtung. Neu: Originale liegen direkt in der Ausrichtung, stabilisierte Clips in „\(FolderNames.stabilized)“ daneben.",
+                icon: "gyroscope",
+                options: [QuestionOption(id: "yes", label: "Umstellen", detail: "\(relPath(ex))/\(FolderNames.legacyOriginal) → \(relPath(ex)), \(relPath(ex))/\(FolderNames.stabilized) → \(relPath(FolderNames.stabilizedDir(forClipDir: ex)))"),
+                          QuestionOption(id: "no", label: "So lassen", detail: "Alte Ordner bleiben, gelten weiter als sortiert")],
+                preset: nil, remember: { _ in },
+                example: "\(relPath(ex))/\(FolderNames.legacyOriginal)/C0001.MP4 → \(relPath(ex))/C0001.MP4", recommended: "yes",
+                reason: "Dann ist alles einheitlich – es wird nur verschoben, nie überschrieben, und ist rückgängig machbar.")
+            guard let a = await resolve([q]) else { phase = .cancelled; return }
+            if a["gyro-migrate"] == "yes" {
+                for l in legacyDirs {
+                    let o = l.appendingPathComponent(FolderNames.legacyOriginal)
+                    for n in ((try? fm.contentsOfDirectory(atPath: o.path)) ?? []) where !n.hasPrefix(".") { jobs.append((o.appendingPathComponent(n), l)) }
+                    for sn in Array(Set([FolderNames.stabilized, "Stabilisiert"])) {
+                        let sd = l.appendingPathComponent(sn)
+                        for n in ((try? fm.contentsOfDirectory(atPath: sd.path)) ?? []) where !n.hasPrefix(".") { jobs.append((sd.appendingPathComponent(n), FolderNames.stabilizedDir(forClipDir: l))) }
+                    }
+                    let g = l.appendingPathComponent(FolderNames.gyroProjects)
+                    for n in ((try? fm.contentsOfDirectory(atPath: g.path)) ?? []) where n.lowercased().hasSuffix(".gyroflow") {
+                        jobs.append((g.appendingPathComponent(n), FolderNames.stabilizedProjectsDir(forClipDir: l)))
+                    }
+                }
             }
         }
         if auto && jobs.isEmpty { return }
@@ -709,24 +745,29 @@ final class Sorter: ObservableObject {
             hints.append("\(untouched) Ordner ohne stabilisierte Clips – unverändert gelassen")
         }
         if !auto {
-            guard await confirmOverview(jobs.map { ($0.0, $0.0.deletingLastPathComponent().appendingPathComponent($0.1)) }) else { phase = .cancelled; return }
+            guard await confirmOverview(jobs) else { phase = .cancelled; return }
         }
         stepLabel = "Schritt 2: Gyroflow-Dateien trennen"
         total = jobs.count; processed = 0
         phase = .sorting
+        var emptied = Set<URL>()
         for (f, target) in jobs.sorted(by: { $0.0.path < $1.0.path }) {
             if Task.isCancelled || safetyStop { phase = .cancelled; return }
             currentFile = f.lastPathComponent
-            if await move(f, to: f.deletingLastPathComponent().appendingPathComponent(target)) {
-                sideCounts[target, default: 0] += 1
+            if await move(f, to: target) {
+                let key = target.lastPathComponent == FolderNames.gyroProjects ? FolderNames.gyroProjects : FolderNames.stabilized
+                sideCounts[key, default: 0] += 1
                 gyroMoved += 1
+                emptied.insert(f.deletingLastPathComponent())
             }
             processed += 1
         }
+        for d in emptied where FolderNames.isGyroFolder(d.lastPathComponent) { removeEmptyDir(d) }
         currentFile = ""
         if total == 0 && problems.isEmpty && !auto {
             hints.append("Keine stabilisierten Clips gefunden. Endungen in den Einstellungen prüfen: \(store.gyroSuffixes)")
         }
+        if gyroMoved > 0 { hints.append("Originale unverändert an ihrem Platz – stabilisierte Clips in „\(FolderNames.stabilized)“ neben Hochkant/Quer") }
     }
 
     func cancel() {
@@ -1304,8 +1345,11 @@ final class Sorter: ObservableObject {
                 guard Self.videoExt.contains(u.pathExtension.lowercased()) else { continue }
                 let parent = u.deletingLastPathComponent()
                 let pn = parent.lastPathComponent
-                if pn == "Gyroflow-Projekte" { continue }
-                if pn == "Stabilisiert" || pn == "Original" { out.append((u, parent.deletingLastPathComponent(), pn)) }
+                if pn == FolderNames.gyroProjects || pn == FolderNames.checkFolder { continue }
+                // neues Schema: <Eltern>/Stabilisiert/<Ebene>/clip → gehört zum Ebenen-Ordner <Eltern>/<Ebene>
+                if let orig = FolderNames.originalDir(forStabilizedDir: parent) { out.append((u, orig, Self.subStab)); continue }
+                if pn == FolderNames.legacyOriginal { out.append((u, parent.deletingLastPathComponent(), Self.subLegacyOriginal)) }
+                else if FolderNames.isStabilizedFolder(pn) { out.append((u, parent.deletingLastPathComponent(), Self.subLegacyStab)) }
                 else { out.append((u, parent, nil)) }
             }
         }
@@ -1335,13 +1379,66 @@ final class Sorter: ObservableObject {
         }
     }
 
+    /// Lage eines schon einsortierten Clips relativ zu seinem Ebenen-Ordner (CInfo.sub)
+    nonisolated static let subStab = "stab"                 // neues Schema <Eltern>/Stabilisiert/<Ebene>
+    nonisolated static let subLegacyStab = "stab-alt"       // alte Logik <Ebene>/Stabilisiert
+    nonisolated static let subLegacyOriginal = "original-alt" // alte Logik <Ebene>/Original
+
     /// Gyroflow-Projekte eines verschobenen Clips mitnehmen (gleicher Dateiname vorne), damit Gyroflow sie wiederfindet
-    private func moveGyroCompanions(stem: String, from dir: URL, to target: URL) async {
-        let g = dir.appendingPathComponent("Gyroflow-Projekte")
-        guard let items = try? fm.contentsOfDirectory(atPath: g.path) else { return }
+    private func moveGyroCompanions(stem: String, from g: URL, to dst: URL) async {
+        guard g.standardizedFileURL.path != dst.standardizedFileURL.path,
+              let items = try? fm.contentsOfDirectory(atPath: g.path) else { return }
         for n in items where n.lowercased().hasPrefix(stem.lowercased()) && n.lowercased().hasSuffix(".gyroflow") {
-            _ = await move(g.appendingPathComponent(n), to: target.appendingPathComponent("Gyroflow-Projekte"))
+            _ = await move(g.appendingPathComponent(n), to: dst)
         }
+    }
+
+    // MARK: Gyroflow – stabilisierte Clips sofort ablegen (aufgerufen vom GyroRunner)
+
+    /// Protokoll für einen Gyroflow-Lauf öffnen (Rückgängig legt die stabilisierten Dateien zurück neben das Original)
+    func beginGyroPlacement(folders f: [URL]) {
+        FolderNames.load()
+        if !f.isEmpty { folders = f }
+        beginJournal("Gyroflow stabilisieren")
+    }
+
+    /// Fertig gerenderte Ausgabe(n) eines Clips sofort nach <Eltern>/Stabilisiert/<Ebene>/ verschieben (sicheres move(), nie überschreiben),
+    /// .gyroflow-Projekt nach <Eltern>/Stabilisiert/Gyroflow-Projekte/. Das Original wird nie angefasst. Rückgabe: Zielordner oder nil.
+    func placeStabilized(_ outputs: [URL], projects: [URL], clipDir: URL) async -> URL? {
+        guard !outputs.isEmpty else { return nil }
+        let target = FolderNames.stabilizedDir(forClipDir: clipDir)
+        for o in outputs where fm.fileExists(atPath: target.appendingPathComponent(o.lastPathComponent).path) {
+            problems.append("\(o.lastPathComponent): liegt schon in „\(relPath(target))“ – nicht überschrieben, neue Fassung bleibt neben dem Original")
+            return nil
+        }
+        var ok = true
+        for o in outputs { if !(await move(o, to: target)) { ok = false } }
+        let pdir = FolderNames.stabilizedProjectsDir(forClipDir: clipDir)
+        for g in projects where !fm.fileExists(atPath: pdir.appendingPathComponent(g.lastPathComponent).path) {
+            _ = await move(g, to: pdir)
+        }
+        return ok ? target : nil
+    }
+
+    /// Ausrichtungs-Prüfung fehlgeschlagen: Ausgabe nach <Eltern>/Stabilisiert/_Prüfen/ (nicht einsortieren)
+    func quarantineStabilized(_ outputs: [URL], clipDir: URL) async -> URL? {
+        let target = FolderNames.leafDir(clipDir).deletingLastPathComponent()
+            .appendingPathComponent(FolderNames.stabilized).appendingPathComponent(FolderNames.checkFolder)
+        var ok = true
+        for o in outputs {
+            if fm.fileExists(atPath: target.appendingPathComponent(o.lastPathComponent).path) { ok = false; continue }
+            if !(await move(o, to: target)) { ok = false }
+        }
+        return ok ? target : nil
+    }
+
+    /// Protokoll schließen → „Rückgängig machen“; die stabilisierten Clips nicht erneut anbieten
+    func endGyroPlacement(placedOriginals: [URL]) {
+        journal?.close()
+        if hasOps, let j = journal { lastJournal = j.appURL; lastJournalUndone = false }
+        let gone = Set(placedOriginals.map { $0.standardizedFileURL.path })
+        gyroOffer.removeAll { gone.contains($0.standardizedFileURL.path) }
+        refreshFolderRuns()
     }
 
     /// Analysiert alle Videos je Dreh und legt nur die Ordner an, die sich dort unterscheiden.
@@ -1368,7 +1465,7 @@ final class Sorter: ObservableObject {
         var reorder: [URL] = []       // Drehs, die neu geordnet werden
         var declined: [URL] = []      // Drehs, bei denen Tim „So lassen“ gewählt hat
         var oldInfos: [CInfo] = []
-        let candidates = check.filter { d in
+        var candidates = check.filter { d in
             guard Self.looksSorted(d) else { return false }
             guard let s = readLayout(d) else { return true }
             return s.key != curKey && s.declined != curKey
@@ -1462,8 +1559,14 @@ final class Sorter: ObservableObject {
             }
             return out
         }
+        var migrateGyro = false   // alte Ordner „Original“/„Stabilisiert“ unter der Ebene ins neue Schema überführen (nur auf Bestätigung)
         func finalDir(_ p: (info: CInfo, dreh: URL, target: URL)) -> URL {
-            p.info.sub.map { p.target.appendingPathComponent($0) } ?? p.target
+            switch p.info.sub {
+            case .some(Self.subStab): return FolderNames.stabilizedDir(forClipDir: p.target)
+            case .some(Self.subLegacyStab): return migrateGyro ? FolderNames.stabilizedDir(forClipDir: p.target) : p.target.appendingPathComponent(FolderNames.stabilized)
+            case .some(Self.subLegacyOriginal): return migrateGyro ? p.target : p.target.appendingPathComponent(FolderNames.legacyOriginal)
+            default: return p.target
+            }
         }
         func here(_ i: CInfo) -> String { i.job.url.deletingLastPathComponent().standardizedFileURL.path }
 
@@ -1480,6 +1583,7 @@ final class Sorter: ObservableObject {
                                       videosName: FolderNames.videos, levels: cfg.levels, configLevels: cfg.levels,
                                       nest: cfg.nestLevels, separator: FolderNames.separator, declined: nil), d))
             }
+            let legacy = changed.contains { $0.info.sub == Self.subLegacyStab || $0.info.sub == Self.subLegacyOriginal }
             if !changed.isEmpty {
                 func rel(_ u: URL, _ d: URL) -> String { String(u.standardizedFileURL.path.dropFirst(d.standardizedFileURL.path.count + 1)) }
                 let ex = changed.prefix(2).map { "\(rel($0.info.job.url, $0.dreh))  →  \(rel(finalDir($0).appendingPathComponent($0.info.job.url.lastPathComponent), $0.dreh))" }
@@ -1491,19 +1595,63 @@ final class Sorter: ObservableObject {
                     message: "\(names): \(plural(changed.count, "Clip liegt", "Clips liegen")) anders, als die aktuellen Einstellungen es vorsehen. Es wird nur verschoben, nichts verändert oder überschrieben.\n" + ex.joined(separator: "\n"),
                     icon: "arrow.triangle.branch",
                     options: [QuestionOption(id: "reorder", label: "Neu ordnen", detail: ex.first ?? ""),
-                              QuestionOption(id: "keep", label: "So lassen, nur neue Dateien einsortieren", detail: "Bisherige Struktur bleibt")],
+                              QuestionOption(id: "keep", label: "So lassen, nur neue Dateien einsortieren", detail: "Bisherige Struktur bleibt")]
+                             + (legacy ? [QuestionOption(id: "reorder-gyro", label: "Neu ordnen + alte Gyroflow-Ordner umstellen",
+                                                         detail: "Originale aus „Original“ zurück in die Ausrichtung, Stabilisierte nach „\(FolderNames.stabilized)/…“ daneben")] : []),
                     preset: nil, remember: { _ in },
                     example: changed.first.map { "\($0.info.job.url.lastPathComponent) → \(relPath(finalDir($0)))" },
                     recommended: "reorder",
                     reason: "Dann ist alles einheitlich nach den aktuellen Einstellungen – es wird nur verschoben und ist rückgängig machbar.")
                 guard let a = await resolve([q]) else { return false }
-                if a["reorder"] == "reorder" {
+                if a["reorder"] == "reorder-gyro" { migrateGyro = true }
+                if a["reorder"] == "reorder" || a["reorder"] == "reorder-gyro" {
                     reorder = changedDrehs
                     for d in reorder { videosRootCache[pk(d)] = newRoot(d) }
                     infos += oldInfos.filter { i in reorder.contains { pk($0) == pk(drehOf(i)) } }
                 } else { declined = changedDrehs }
             }
         }
+
+        // Bereits sortierte Drehs (auch ohne neue Clips): mehrere Frameraten bzw. Tage → in der Fragenrunde fragen.
+        // Antwort je Dreh in „.camsort-fragen“ gemerkt; „Ja“ ordnet über die Neu-ordnen-Logik um (inkl. Stabilisiert, Protokoll).
+        var askedDrehs: [URL] = []
+        let askFps = !lv.contains("fps") && store.fpsMode == "ask"
+        let askDate = !lv.contains("date") && store.dateMode == "ask"
+        if askFps || askDate {
+            for d in check.sorted(by: { $0.path < $1.path }) where Self.looksSorted(d)
+                && !reorder.contains(where: { pk($0) == pk(d) }) && !declined.contains(where: { pk($0) == pk(d) }) {
+                let asked = readAsked(d)
+                let vr = videosRoot(d)
+                let fpsOpen = askFps && asked["fps"] == nil && !hasFpsFolders(vr)
+                let dateOpen = askDate && asked["date"] == nil && existingDateLayout(vr, onlySorted: vr.standardizedFileURL.path == d.standardizedFileURL.path) == nil
+                guard fpsOpen || dateOpen else { continue }
+                let sig = readLayout(d)
+                var list: [CInfo] = []
+                for c in sortedClips(in: d) {
+                    if Task.isCancelled { return false }
+                    currentFile = c.url.lastPathComponent
+                    let sib = Set((try? fm.contentsOfDirectory(atPath: c.dir.path)) ?? [])
+                    var cam = oldCamera(c.dir, dreh: d, sig: sig)
+                    if cam == nil { cam = await quietCamera(c.url, siblings: sib) }
+                    let job = Job(dir: c.dir, url: c.url, cat: .video, ext: c.url.pathExtension.lowercased())
+                    guard var i = await analyzeClip(job, siblings: sib, fixedCam: cam) else { return false }
+                    i.old = true; i.sub = c.sub
+                    list.append(i)
+                }
+                let fpsN = Set(list.map(\.fps).filter { !$0.isEmpty }).count
+                let dayN = Set(list.map { store.dayString($0.start) }).count
+                if (fpsOpen && fpsN > 1) || (dateOpen && dayN > 1) {
+                    askedDrehs.append(d)
+                    candidates.append(d)
+                    reorder.append(d)
+                    infos += list
+                }
+            }
+        }
+        var askedFpsAnswer: String? = nil, askedDateAnswer: String? = nil
+        let onlyAsked = !askedDrehs.isEmpty && !infos.contains { !$0.old } && reorder.allSatisfy { r in askedDrehs.contains { pk($0) == pk(r) } }
+        let fpsDone = onlyAsked && askedDrehs.allSatisfy { readAsked($0)["fps"] != nil || hasFpsFolders(videosRoot($0)) }
+        let dateDone = onlyAsked && askedDrehs.allSatisfy { readAsked($0)["date"] != nil }
 
         // Rückfrage: mehrere Aufnahmetage → auch nach Datum sortieren?
         // Tagesordner: vorhandene Struktur weiterführen (außer beim Neu-Ordnen); sonst nur fragen, wenn neue Clips von mehreren Tagen dabei sind
@@ -1519,11 +1667,12 @@ final class Sorter: ObservableObject {
             var choice: String? = existing
             let sample = infos.first { !$0.old } ?? infos.first
             let sampleText = sample.map { i in "\(i.job.url.lastPathComponent) (\(store.dayString(i.start))) → \(drehOf(i).lastPathComponent)/\(vp)\(i.cam)/\(store.dayString(i.start))/…" }
-            if existing == nil && (hasNew || !reorder.isEmpty) && projectsNeedDate(infos.map { ($0.job.url, $0.start) }),
+            if existing == nil && !dateDone && (hasNew || !reorder.isEmpty) && projectsNeedDate(infos.map { ($0.job.url, $0.start) }),
                let q = dateQuestion(starts: infos.map(\.start), existing: nil,
                                     example: ("\(vp)\(day)/Kamera/…", "\(vp)Kamera/\(day)/…"), sample: sampleText) {
                 guard let a = await resolve([q]) else { return false }
                 choice = a["date"]
+                askedDateAnswer = choice ?? "off"
             }
             switch choice {
             case "top": lv.insert("date", at: 0)
@@ -1542,8 +1691,10 @@ final class Sorter: ObservableObject {
                 let ex = LearnedStore.insertingFps(into: lv).map { LevelBuilder.sample($0, store) }
                 let fs = fresh.first { $0.fps != fresh.first?.fps } ?? fresh.first
                 let fsText = fs.map { "\($0.job.url.lastPathComponent) → \(drehOf($0).lastPathComponent)/\(wantsVideosFolder ? FolderNames.videos + "/" : "")\($0.cam)/\($0.fps)/…" }
-                if let q = fpsQuestion(fresh.map(\.fps), example: (wantsVideosFolder ? "\(FolderNames.videos)/" : "") + (cfg.nestLevels ? ex.joined(separator: "/") : ex.joined(separator: FolderNames.separator)) + "/…", sample: fsText) {
+                if !fpsDone, let q = fpsQuestion(fresh.map(\.fps), example: (wantsVideosFolder ? "\(FolderNames.videos)/" : "") + (cfg.nestLevels ? ex.joined(separator: "/") : ex.joined(separator: FolderNames.separator)) + "/…", sample: fsText,
+                                       existing: !askedDrehs.isEmpty && !infos.contains { !$0.old }) {
                     guard let a = await resolve([q]) else { return false }
+                    askedFpsAnswer = a["fps"] ?? "no"
                     if a["fps"] == "yes" { lv = LearnedStore.insertingFps(into: lv) }
                 }
             }
@@ -1555,6 +1706,10 @@ final class Sorter: ObservableObject {
         guard await confirmOverview(moves + extra) else { return false }
         for (sig, d) in layoutWrites { writeLayout(sig, to: d) }
         layoutWrites = []
+        for d in askedDrehs {
+            if let a = askedFpsAnswer { noteAsked(d, "fps", a) }
+            if let a = askedDateAnswer { noteAsked(d, "date", a) }
+        }
         total += oldInfos.isEmpty ? 0 : infos.filter(\.old).count
         var reordered = 0
         for p in steps {
@@ -1574,7 +1729,13 @@ final class Sorter: ObservableObject {
                     movedVideos += 1
                     if i.old {
                         reordered += 1
-                        if i.sub != "Stabilisiert" { await moveGyroCompanions(stem: i.job.url.deletingPathExtension().lastPathComponent, from: i.job.dir, to: p.target) }
+                        let st = i.job.url.deletingPathExtension().lastPathComponent
+                        if i.sub == Self.subStab || (migrateGyro && i.sub == Self.subLegacyStab) {
+                            let from = i.sub == Self.subStab ? FolderNames.stabilizedProjectsDir(forClipDir: i.job.dir) : i.job.dir.appendingPathComponent(FolderNames.gyroProjects)
+                            await moveGyroCompanions(stem: st, from: from, to: FolderNames.stabilizedProjectsDir(forClipDir: p.target))
+                        } else if i.sub == nil || i.sub == Self.subLegacyOriginal {
+                            await moveGyroCompanions(stem: st, from: i.job.dir.appendingPathComponent(FolderNames.gyroProjects), to: p.target.appendingPathComponent(FolderNames.gyroProjects))
+                        }
                     }
                 }
             }
@@ -1886,8 +2047,50 @@ final class Sorter: ObservableObject {
         return FolderNames.fpsName(FolderNames.fpsClass(fps))
     }
 
+    // MARK: Gemerkte Fragen bereits sortierter Ordner (Framerate/Datum)
+
+    nonisolated static let askedMarker = ".camsort-fragen"
+
+    /// Antworten auf „Auch nach Framerate/Datum sortieren?“ für einen schon sortierten Dreh/Kameraordner (unsichtbare Datei)
+    func readAsked(_ d: URL) -> [String: String] {
+        guard let data = try? Data(contentsOf: d.appendingPathComponent(Self.askedMarker)),
+              let m = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return m
+    }
+
+    private func noteAsked(_ d: URL, _ key: String, _ value: String) {
+        var m = readAsked(d)
+        m[key] = value
+        guard let data = try? JSONEncoder().encode(m) else { return }
+        _ = writeLogged(data, to: d.appendingPathComponent(Self.askedMarker))
+    }
+
+    /// Schon einsortierte Clips eines Kameraordners („Meine Kameraordner“): Ebenen-Ordner (Hochkant/Quer/Quadratisch),
+    /// Unterordner darunter (alte Logik „Original“/„Stabilisiert“) und ob der Clip im neuen Schema <Eltern>/Stabilisiert/<Ebene> liegt.
+    private func ownSortedClips(in cam: URL) -> [(url: URL, leaf: URL, rest: [String], stab: Bool)] {
+        guard let en = fm.enumerator(at: cam, includingPropertiesForKeys: [.isRegularFileKey],
+                                     options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
+        let base = cam.standardizedFileURL.pathComponents.count
+        var out: [(url: URL, leaf: URL, rest: [String], stab: Bool)] = []
+        while let u = en.nextObject() as? URL {
+            guard Self.videoExt.contains(u.pathExtension.lowercased()) else { continue }
+            var dir = u.deletingLastPathComponent().standardizedFileURL
+            if dir.lastPathComponent == FolderNames.gyroProjects || dir.lastPathComponent == FolderNames.checkFolder { continue }
+            var stab = false
+            if let o = FolderNames.originalDir(forStabilizedDir: dir) { dir = o; stab = true }
+            var rest: [String] = []
+            while !FolderNames.isOrientation(dir.lastPathComponent) && dir.pathComponents.count > base + 1 && rest.count < 2 {
+                rest.insert(dir.lastPathComponent, at: 0)
+                dir = dir.deletingLastPathComponent()
+            }
+            guard FolderNames.isOrientation(dir.lastPathComponent), dir.pathComponents.count > base else { continue }
+            out.append((u, dir, rest, stab))
+        }
+        return out.sorted { $0.url.path < $1.url.path }
+    }
+
     /// Frage „Auch nach Framerate sortieren?“ – nur bei mindestens zwei verschiedenen Frameraten. nil = nicht fragen (Antwort „no“).
-    func fpsQuestion(_ names: [String], example pos: String, sample: String? = nil) -> PreRunQuestion? {
+    func fpsQuestion(_ names: [String], example pos: String, sample: String? = nil, existing: Bool = false) -> PreRunQuestion? {
         guard store.fpsMode != "off" else { return nil }
         var count: [String: Int] = [:]
         for n in names { count[n, default: 0] += 1 }
@@ -1895,8 +2098,9 @@ final class Sorter: ObservableObject {
         func num(_ k: String) -> Int { Int(k.prefix { $0.isNumber }) ?? Int.max }
         let list = count.keys.sorted { (num($0), $0) < (num($1), $1) }.map { "\($0): \(count[$0]!)" }.joined(separator: ", ")
         return PreRunQuestion(
-            key: "fps", title: "Auch nach Framerate sortieren?",
-            message: "Die Clips haben unterschiedliche Frameraten (\(list)).",
+            key: "fps", title: existing ? "Hier gibt es mehrere Frameraten – jetzt auch nach Framerate sortieren?" : "Auch nach Framerate sortieren?",
+            message: existing ? "Hier gibt es mehrere Frameraten (\(list)). Jetzt auch nach Framerate sortieren? (bestehende Clips werden nur verschoben)"
+                              : "Die Clips haben unterschiedliche Frameraten (\(list)).",
             icon: "speedometer",
             options: [QuestionOption(id: "yes", label: "Ja, unter der Kamera", detail: pos),
                       QuestionOption(id: "no", label: "Nein", detail: "Alle Frameraten zusammen")],
@@ -1917,7 +2121,7 @@ final class Sorter: ObservableObject {
             let u = root.appendingPathComponent(k)
             guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { continue }
             if FolderNames.hasFpsPart(k) { return true }
-            if FolderNames.isOrientation(k) || ["Stabilisiert", "Original", "Gyroflow-Projekte"].contains(k) { continue }
+            if FolderNames.isOrientation(k) || FolderNames.isGyroFolder(k) { continue }
             if hasFpsFolders(u, depth: depth - 1) { return true }
         }
         return false
@@ -2176,7 +2380,7 @@ extension Sorter {
     private func ownSkipNames() -> Set<String> {
         var s = Set(outputNames.map(FolderNames.fold))
         for f in store.specialFolders { s.insert(FolderNames.fold(f)) }
-        for f in ["Stabilisiert", "Original", "Gyroflow-Projekte", "Videos", FolderNames.videos, "Musik", "ZIP", "FCP", "Sonstiges"] { s.insert(FolderNames.fold(f)) }
+        for f in ["Stabilisiert", FolderNames.stabilized, "Original", "Gyroflow-Projekte", "Videos", FolderNames.videos, "Musik", "ZIP", "FCP", "Sonstiges"] { s.insert(FolderNames.fold(f)) }
         return s
     }
 
@@ -2406,6 +2610,82 @@ extension Sorter {
                 for k in infos.indices { infos[k].parts.append(infos[k].fps) }
             }
         }
+        // 3b') Bereits einsortierte Clips: mehrere Frameraten bzw. Tage → auch ohne neue Clips fragen (Antwort je Kameraordner gemerkt).
+        //      „Ja“ verschiebt nur (inkl. Stabilisiert-Ordner), mit Protokoll → rückgängig machbar.
+        var levelMoves: [(URL, URL)] = []
+        var askedWrites: [(URL, String, String)] = []
+        typealias OldClip = (url: URL, leaf: URL, rest: [String], stab: Bool, fps: String, day: String, start: Date)
+        var oldByCam: [URL: [OldClip]] = [:]
+        func oldClips(_ cam: URL) async -> [OldClip] {
+            if let c = oldByCam[cam] { return c }
+            var list: [OldClip] = []
+            for c in ownSortedClips(in: cam) {
+                if Task.isCancelled { break }
+                currentFile = c.url.lastPathComponent
+                let asset = AVURLAsset(url: c.url)
+                let p = await videoProps(of: asset)
+                let (st, _) = await recordingTime(asset, url: c.url)
+                list.append((c.url, c.leaf, c.rest, c.stab, fpsFolder(for: c.url, nominal: p.nominalFps), store.dayString(st), st))
+            }
+            oldByCam[cam] = list
+            return list
+        }
+        func destFor(_ c: OldClip, leaf nl: URL) -> URL {
+            var d = c.stab ? FolderNames.stabilizedDir(forClipDir: nl) : nl
+            for r in c.rest { d = d.appendingPathComponent(r) }
+            return d
+        }
+        var fpsAdded = false
+        if !extras.contains("fps") && store.fpsMode == "ask" {
+            var per: [(cam: URL, clips: [OldClip])] = []
+            for cam in cams where readAsked(cam)["fps"] == nil && !hasFpsFolders(cam) {
+                let l = await oldClips(cam)
+                if Set(l.map(\.fps)).count > 1 { per.append((cam, l)) }
+            }
+            let all = per.flatMap { $0.clips }
+            if !all.isEmpty, let f = all.first(where: { $0.fps != all[0].fps }) ?? all.first,
+               let q = fpsQuestion(all.map(\.fps), example: "A1/" + (extras.isEmpty ? "" : "…/") + "\(f.fps)/Hochkant",
+                                   sample: "\(f.url.lastPathComponent) → \(relPath(f.leaf.deletingLastPathComponent()))/\(f.fps)/\(f.leaf.lastPathComponent)", existing: true) {
+                guard let a = await resolve([q]) else { phase = .cancelled; return }
+                let yes = a["fps"] == "yes"
+                for p in per { askedWrites.append((p.cam, "fps", yes ? "yes" : "no")) }
+                if yes {
+                    fpsAdded = true
+                    for c in all {
+                        let nl = c.leaf.deletingLastPathComponent().appendingPathComponent(c.fps).appendingPathComponent(c.leaf.lastPathComponent)
+                        levelMoves.append((c.url, destFor(c, leaf: nl)))
+                    }
+                }
+            }
+        }
+        if dateChoice == "off" && !cfg.levels.contains("date") && store.dateMode == "ask" && existing == nil && !fpsAdded {
+            var per: [(cam: URL, clips: [OldClip])] = []
+            for cam in cams where readAsked(cam)["date"] == nil && camInfo[cam.path]?.inDayFolder != true && existingDateLayout(cam) == nil {
+                let l = await oldClips(cam)
+                if Set(l.map(\.day)).count > 1 { per.append((cam, l)) }
+            }
+            let all = per.flatMap { $0.clips }
+            let starts: [Date] = all.map(\.start)
+            if let f = all.first, let q = dateQuestion(starts: starts, existing: nil,
+                                                       example: ("Dreh/\(f.day)/A1/Hochkant", "Dreh/A1/\(f.day)/Hochkant"),
+                                                       sample: "\(f.url.lastPathComponent) (\(f.day)) → \(relPath(per[0].cam))/\(f.day)/…") {
+                guard let a = await resolve([q]) else { phase = .cancelled; return }
+                let choice = a["date"] ?? "off"
+                for p in per { askedWrites.append((p.cam, "date", choice)) }
+                if choice != "off" {
+                    // bestehende Clips: Tagesordner direkt unter der Kamera (<Kamera>/<Tag>/…/Hochkant)
+                    for p in per {
+                        let cb = p.cam.standardizedFileURL.pathComponents.count
+                        for c in p.clips {
+                            var nl = p.cam.appendingPathComponent(Self.clean(c.day))
+                            for comp in c.leaf.standardizedFileURL.pathComponents.dropFirst(cb) { nl = nl.appendingPathComponent(comp) }
+                            levelMoves.append((c.url, destFor(c, leaf: nl)))
+                        }
+                    }
+                    if choice == "top" { hints.append("Bereits einsortierte Clips: Tagesordner liegen unter der Kamera.") }
+                }
+            }
+        }
         if dateChoice == "top" && ownCams.contains(where: { $0.group == nil }) {
             hints.append("Tagesordner oben geht nur, wenn der Dreh-Ordner (mit den Kameraordnern) gewählt ist – für direkt gewählte Kameraordner liegen die Tage unter der Kamera.")
         }
@@ -2463,7 +2743,18 @@ extension Sorter {
         }
         var overviewMoves: [(URL, URL)] = vPlan.map { ($0.i.v.url, $0.target) }
         overviewMoves += oPlan.map { ($0.f.url, $0.target) }
+        overviewMoves += levelMoves
         guard await confirmOverview(overviewMoves) else { phase = .cancelled; return }
+        for (d, k, v) in askedWrites { noteAsked(d, k, v) }
+        // 4a') bereits einsortierte Clips in die neue Framerate-/Tages-Ebene verschieben (nur verschieben, Protokoll)
+        var levelMoved = 0
+        for (src, dst) in levelMoves {
+            if Task.isCancelled || safetyStop { phase = .cancelled; return }
+            currentFile = src.lastPathComponent
+            guard fm.fileExists(atPath: src.path), !samePath(src.deletingLastPathComponent(), dst) else { continue }
+            if await move(src, to: dst) { levelMoved += 1; emptied.insert(src.deletingLastPathComponent()) }
+        }
+        if levelMoved > 0 { hints.insert("Neu geordnet: \(plural(levelMoved, "Clip", "Clips")) in die neue Framerate-/Tages-Ebene verschoben (Dateien unverändert)", at: 0) }
 
         // 4b) Verschieben
         for st in vPlan {
@@ -2750,7 +3041,7 @@ extension Sorter {
 
         // Unsortierte Dateien einsammeln (CamSort-Ausgabeordner und Projektordner nicht betreten)
         var skip = Set(outputNames.map(FolderNames.fold))
-        for f in ["Stabilisiert", "Original", "Gyroflow-Projekte", "Musik", "ZIP", "FCP", "Sonstiges"] { skip.insert(FolderNames.fold(f)) }
+        for f in ["Stabilisiert", FolderNames.stabilized, "Original", "Gyroflow-Projekte", "Musik", "ZIP", "FCP", "Sonstiges"] { skip.insert(FolderNames.fold(f)) }
         if cfg.ownCameraFolders { for f in store.specialFolders { skip.insert(FolderNames.fold(f)) } }
         let projectPaths = Set(projects.map { $0.url.standardizedFileURL.path })
         var files: [URL] = []

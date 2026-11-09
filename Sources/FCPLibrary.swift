@@ -164,7 +164,7 @@ final class FCPLibraryBuilder: ObservableObject {
     /// Alle Medien eines Drehs mit Schlagwörtern aus der Ordnerstruktur
     nonisolated static func collect(dreh: URL, excluding others: [URL], suffixes: [String], photos: Bool, originals: Bool) -> [Item] {
         let fm = FileManager.default
-        let skipDirs: Set<String> = Set([FolderNames.side, "Begleitdateien", "Gyroflow-Projekte", "ZIP", "FCP", "Sonstiges"].map(FolderNames.fold))
+        let skipDirs: Set<String> = Set([FolderNames.side, "Begleitdateien", FolderNames.gyroProjects, FolderNames.checkFolder, "ZIP", "FCP", "Sonstiges"].map(FolderNames.fold))
         let otherPaths = Set(others.map { $0.standardizedFileURL.path })
         let base = dreh.standardizedFileURL.pathComponents
         var raw: [(url: URL, kind: Kind, dirs: [String])] = []
@@ -193,10 +193,10 @@ final class FCPLibraryBuilder: ObservableObject {
         for r in raw {
             var kw = keywords(fromDirs: r.dirs)
             if r.kind == .video {
-                if isStab(r.url) { kw.append("Stabilisiert") }
+                if isStab(r.url) { kw.append(FolderNames.stabilized) }
                 else if stabStems.contains(where: { $0.hasPrefix(stem(r.url)) }) {
                     guard originals else { continue }
-                    kw.append("Original")
+                    kw.append(FolderNames.legacyOriginal)
                 }
             }
             if let tags = (try? r.url.resourceValues(forKeys: [.tagNamesKey]))?.tagNames { kw += tags }
@@ -215,7 +215,7 @@ final class FCPLibraryBuilder: ObservableObject {
     /// Ordnernamen → Schlagwörter. Sammelordner (Videos, Fotos, Extras) und Stabilisiert/Original fallen weg,
     /// zusammengesetzte Namen („Sony A1 · Quer“) werden geteilt, Szenen-Ordner nur mit „Szene 03“.
     nonisolated static func keywords(fromDirs dirs: [String]) -> [String] {
-        let drop = Set(["Videos", FolderNames.videos, FolderNames.photos, "Fotos", FolderNames.extras, "Extras", "Stabilisiert", "Original"].map(FolderNames.fold))
+        let drop = Set(["Videos", FolderNames.videos, FolderNames.photos, "Fotos", FolderNames.extras, "Extras", "Stabilisiert", FolderNames.stabilized, FolderNames.legacyOriginal].map(FolderNames.fold))
         var kw: [String] = []
         for d in dirs {
             if drop.contains(FolderNames.fold(d)) { continue }

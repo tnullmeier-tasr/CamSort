@@ -18,7 +18,43 @@ enum FolderNames {
 
     static var videoAliases: Set<String> { ["Videos", videos] }
     static func isVideos(_ s: String) -> Bool { videoAliases.contains(s) }
-    static var outputNames: Set<String> { [videos, photos, side, extras, "Videos", "Fotos", "Begleitdateien", "Extras", square, "Quadratisch"] }
+    static var outputNames: Set<String> { [videos, photos, side, extras, "Videos", "Fotos", "Begleitdateien", "Extras", square, "Quadratisch", stabilized, "Stabilisiert"] }
+
+    // MARK: Gyroflow / Stabilisiert
+    /// Ordner für stabilisierte Clips – einstellbar (Key fnStabilized). Liegt auf derselben Ebene wie die Ausrichtungs-/Ebenen-Ordner.
+    static var stabilized = "Stabilisiert"
+    static var stabilizedAliases: Set<String> { ["Stabilisiert", stabilized] }
+    static func isStabilizedFolder(_ s: String) -> Bool { let f = fold(s); return stabilizedAliases.contains { fold($0) == f } }
+    /// Alte Logik (vor 2026-11): Originale wurden in „Original“ unterhalb der Ausrichtung verschoben – nur noch erkannt
+    static let legacyOriginal = "Original"
+    static let gyroProjects = "Gyroflow-Projekte"
+    /// Stabilisierte Ausgaben mit falscher Ausrichtung (nicht einsortiert): <Eltern>/Stabilisiert/_Prüfen
+    static let checkFolder = "_Prüfen"
+    /// Ordner, in die CamSorts Gyroflow-Logik ablegt (beim Durchsuchen nach neuen Clips überspringen)
+    static func isGyroFolder(_ s: String) -> Bool { isStabilizedFolder(s) || s == legacyOriginal || s == gyroProjects || s == checkFolder }
+
+    /// Ebenen-Ordner, zu dem ein Clip-Ordner gehört (alte Struktur: „…/Quer/Original“ und „…/Quer/Stabilisiert“ → „…/Quer“)
+    static func leafDir(_ dir: URL) -> URL {
+        let n = dir.lastPathComponent
+        return (n == legacyOriginal || isStabilizedFolder(n)) ? dir.deletingLastPathComponent() : dir
+    }
+    /// Regel: Der Stabilisiert-Ordner liegt im Elternordner des (letzten) Ebenen-Ordners, darunter derselbe Ordnername.
+    /// `A1/Hochkant` → `A1/Stabilisiert/Hochkant`, `Videos/Sony A1 · Quer` → `Videos/Stabilisiert/Sony A1 · Quer`,
+    /// `Videos/Sony A1/Quer/50 fps` → `Videos/Sony A1/Quer/Stabilisiert/50 fps`.
+    static func stabilizedDir(forClipDir dir: URL) -> URL {
+        let leaf = leafDir(dir)
+        return leaf.deletingLastPathComponent().appendingPathComponent(stabilized).appendingPathComponent(leaf.lastPathComponent)
+    }
+    /// Gyroflow-Projektdateien stabilisierter Clips: `<Eltern>/Stabilisiert/Gyroflow-Projekte`
+    static func stabilizedProjectsDir(forClipDir dir: URL) -> URL {
+        leafDir(dir).deletingLastPathComponent().appendingPathComponent(stabilized).appendingPathComponent(gyroProjects)
+    }
+    /// Liegt der Ordner im neuen Schema `<Eltern>/Stabilisiert/<Ebene>`? Dann der Ebenen-Ordner der Originale, sonst nil.
+    static func originalDir(forStabilizedDir dir: URL) -> URL? {
+        let parent = dir.deletingLastPathComponent()
+        guard isStabilizedFolder(parent.lastPathComponent), !isStabilizedFolder(dir.lastPathComponent), dir.lastPathComponent != gyroProjects, dir.lastPathComponent != checkFolder else { return nil }
+        return parent.deletingLastPathComponent().appendingPathComponent(dir.lastPathComponent)
+    }
 
     /// Ausrichtungs-Ordner (fest, wie überall in CamSort)
     static let portrait = "Hochkant"
@@ -94,6 +130,7 @@ enum FolderNames {
         func s(_ k: String, _ def: String) -> String { let v = d.string(forKey: k)?.trimmingCharacters(in: .whitespaces) ?? ""; return v.isEmpty ? def : v.replacingOccurrences(of: "/", with: "-") }
         videos = s("fnVideos", "Videos"); photos = s("fnPhotos", "Fotos"); side = s("fnSide", "Begleitdateien"); extras = s("fnExtras", "Extras")
         square = s("fnSquare", "Quadratisch")
+        stabilized = s("fnStabilized", "Stabilisiert")
         separator = d.string(forKey: "fnSeparator") ?? " · "
         showCamera = d.object(forKey: "fnShowCamera") as? Bool ?? true
         showOrientation = d.object(forKey: "fnShowOrientation") as? Bool ?? true

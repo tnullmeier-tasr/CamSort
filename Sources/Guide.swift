@@ -16,7 +16,7 @@ struct GuideView: View {
         ("doc.on.doc.fill", "Doppelte Dateien",
          "Gibt es eine Datei im Ziel schon, fragt CamSort: überspringen, beide behalten oder ersetzen (alte Datei kommt in den Papierkorb) – auf Wunsch für alle weiteren."),
         ("gyroscope", "Gyroflow",
-         "Nach dem Sortieren kann CamSort alle Sony-Clips einzeln nacheinander mit deinem Gyroflow-Preset stabilisieren – erst Hochkant, dann Quer, mit Pause-Knopf. Danach trennt es automatisch in „Stabilisiert“ und „Original“. Wer lieber selbst in Gyroflow rendert, nutzt „Nur Gyroflow-Clips trennen“. Der Gyroflow-Knopf lässt sich in den Einstellungen ausblenden."),
+         "Nach dem Sortieren kann CamSort alle Sony-Clips einzeln nacheinander mit deinem Gyroflow-Preset stabilisieren – erst Hochkant, dann Quer, mit Pause-Knopf. Jeder fertige Clip kommt sofort in „Stabilisiert“ neben Hochkant/Quer, die Originale bleiben unverändert. Wer lieber selbst in Gyroflow rendert, nutzt „Nur Gyroflow-Clips trennen“. Der Gyroflow-Knopf lässt sich in den Einstellungen ausblenden."),
         ("airplane", "Drohnen nach Geschwindigkeit",
          "Optional: Aus der SRT-Datei wird die Durchschnittsgeschwindigkeit berechnet und der Clip in „Stand“, „Fahrt“ oder „Dazwischen“ einsortiert. Clips ohne GPS kommen nach „Ohne GPS“."),
         ("camera.aperture", "Nach Objektiv",
