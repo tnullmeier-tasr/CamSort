@@ -487,6 +487,57 @@ struct E2E {
             selM.close()
         }
 
+        // 6j2) Final-Cut-Mediathek: FCPXML je Dreh, Medien bleiben unverändert am Ort (Final Cut wird nicht geöffnet)
+        do {
+            let fmx = FileManager.default
+            func digest(_ u: URL) -> String { (try? Data(contentsOf: u)).map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "-" }
+            let drehs = FCPLibraryBuilder.drehs(for: [root])
+            check(!drehs.isEmpty, "Mediathek: \(drehs.count) Dreh-/Projektordner erkannt")
+            for dr in drehs.prefix(2) {
+                guard let plan = FCPLibraryBuilder.plan(dreh: dr, excluding: drehs.filter { $0 != dr }, suffixes: store.gyroSuffixList, photos: true, originals: true) else {
+                    check(false, "Mediathek: Plan für \(dr.lastPathComponent)"); continue
+                }
+                var before: [String: String] = [:]
+                for it in plan.items { before[it.url.path] = digest(it.url) }
+                guard let res = try? await FCPLibraryBuilder.write(plan: plan) else { check(false, "Mediathek: FCPXML für \(plan.name) geschrieben"); continue }
+                check(res.xml.lastPathComponent == "\(plan.name).fcpxml" && fmx.fileExists(atPath: res.xml.path), "Mediathek: \(res.xml.lastPathComponent) im Dreh-Ordner")
+                guard let doc = try? XMLDocument(contentsOf: res.xml, options: []) else { check(false, "Mediathek: FCPXML wohlgeformt"); continue }
+                check(true, "Mediathek: FCPXML wohlgeformt (XMLDocument)")
+                let opts = ((try? doc.nodes(forXPath: "/fcpxml/import-options/option")) ?? []).compactMap { $0 as? XMLElement }
+                let loc = opts.first { $0.attribute(forName: "key")?.stringValue == "library location" }?.attribute(forName: "value")?.stringValue ?? ""
+                check(URL(string: loc)?.lastPathComponent == "\(plan.name).fcpbundle" && URL(string: loc)?.deletingLastPathComponent().standardizedFileURL.path == dr.standardizedFileURL.path,
+                      "Mediathek: library location = gleichnamige \(plan.name).fcpbundle im Dreh-Ordner")
+                check(opts.contains { $0.attribute(forName: "key")?.stringValue == "copy assets" && $0.attribute(forName: "value")?.stringValue == "0" }, "Mediathek: Importoption „copy assets = 0“ (verknüpfen statt kopieren)")
+                let srcs = ((try? doc.nodes(forXPath: "//media-rep/@src")) ?? []).compactMap { $0.stringValue }
+                check(srcs.count == plan.items.count - res.skipped && srcs.allSatisfy { URL(string: $0).map { fmx.fileExists(atPath: $0.path) } ?? false },
+                      "Mediathek: \(srcs.count) Assets, alle src existieren am Originalort")
+                let clips = ((try? doc.nodes(forXPath: "//event/asset-clip")) ?? []).compactMap { $0 as? XMLElement }
+                let kw = Set(((try? doc.nodes(forXPath: "//asset-clip/keyword/@value")) ?? []).compactMap { $0.stringValue })
+                check(clips.count == srcs.count && clips.allSatisfy { ($0.elements(forName: "keyword")).count > 0 }, "Mediathek: jeder Clip hat Schlagwörter")
+                check(kw.contains(where: { $0.hasSuffix("fps") }) && (kw.contains("Quer") || kw.contains("Hochkant") || kw.contains(FolderNames.square)), "Mediathek: Schlagwörter Ausrichtung + fps (\(kw.sorted().prefix(8).joined(separator: ", ")))")
+                // Hochkant-Clips → Format höher als breit
+                let assets = ((try? doc.nodes(forXPath: "//resources/asset")) ?? []).compactMap { $0 as? XMLElement }
+                let fmts = ((try? doc.nodes(forXPath: "//resources/format")) ?? []).compactMap { $0 as? XMLElement }
+                func fmt(_ id: String) -> (Int, Int) {
+                    let f = fmts.first { $0.attribute(forName: "id")?.stringValue == id }
+                    return (Int(f?.attribute(forName: "width")?.stringValue ?? "") ?? 0, Int(f?.attribute(forName: "height")?.stringValue ?? "") ?? 0)
+                }
+                let portraitIDs = Set(clips.filter { c in c.elements(forName: "keyword").contains { $0.attribute(forName: "value")?.stringValue == "Hochkant" } }.compactMap { $0.attribute(forName: "ref")?.stringValue })
+                let portraitOK = assets.filter { portraitIDs.contains($0.attribute(forName: "id")?.stringValue ?? "") }.allSatisfy { a in let wh = fmt(a.attribute(forName: "format")?.stringValue ?? ""); return wh.1 > wh.0 }
+                check(portraitOK, "Mediathek: \(portraitIDs.count) Hochkant-Clips mit hohem Format (Breite < Höhe)")
+                check(plan.items.allSatisfy { before[$0.url.path] == digest($0.url) }, "Mediathek: Medien unverändert (SHA256 vorher = nachher), nichts kopiert")
+                check(fmx.fileExists(atPath: dr.appendingPathComponent(FCPLibraryBuilder.memoName).path), "Mediathek: Gedächtnis .camsort-fcp.json angelegt")
+                check(FCPLibraryBuilder.isOwnOutput(res.xml), "Mediathek: eigene FCPXML wird beim erneuten Sortieren nicht verschoben")
+                // Nachtrag: Mediathek „existiert“ → nur neue Clips
+                try? fmx.createDirectory(at: plan.library, withIntermediateDirectories: true)
+                let again = FCPLibraryBuilder.plan(dreh: dr, excluding: drehs.filter { $0 != dr }, suffixes: store.gyroSuffixList, photos: true, originals: true)
+                check(again?.isAddition == true && again?.upToDate == true, "Mediathek: zweiter Durchlauf erkennt „alles schon drin“ (Nachtrag-Logik)")
+                check(FCPLibraryBuilder.ownLibraries(in: [root]).contains(plan.library), "Mediathek: Neu-Verknüpfen-Hinweis findet \(plan.library.lastPathComponent)")
+                try? fmx.copyItem(at: res.xml, to: outDir.appendingPathComponent("beispiel-mediathek.fcpxml"))
+                for u in [res.xml, plan.library, dr.appendingPathComponent(FCPLibraryBuilder.memoName)] { try? fmx.removeItem(at: u) }
+            }
+        }
+
         // 6k) Modus „Meine Kameraordner“: eigene Ordner = Kamera, darin nur Hochkant/Quer/Quadratisch
         do {
             let fmx = FileManager.default

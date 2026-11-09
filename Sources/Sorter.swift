@@ -510,7 +510,7 @@ final class Sorter: ObservableObject {
             let ext = u.pathExtension.lowercased()
             if v?.isDirectory == true {
                 if Self.projectExt.contains(ext) || v?.isPackage == true {
-                    if Self.projectExt.contains(ext) { out.append((u.deletingLastPathComponent(), u, ext)) }
+                    if Self.projectExt.contains(ext) && !FCPLibraryBuilder.isOwnOutput(u) { out.append((u.deletingLastPathComponent(), u, ext)) }
                     return false
                 }
                 // Schon Einsortiertes (unter „Videos“) wird nicht neu eingelesen – „Neu ordnen“ holt es bei Bedarf gezielt (layoutCompact)
@@ -552,7 +552,7 @@ final class Sorter: ObservableObject {
         }
         var siblings: [URL: Set<String>] = [:]
         for f in found { siblings[f.dir, default: []].insert(f.url.lastPathComponent) }
-        fcpLibraries = found.filter { $0.ext == "fcpbundle" }.map(\.url)
+        fcpLibraries = found.filter { $0.ext == "fcpbundle" }.map(\.url) + FCPLibraryBuilder.ownLibraries(in: folders)   // eigene Mediathek (CamSort) mit Neu-Verknüpfen-Hinweis
 
         // Unbekannte Dateitypen erfragen
         var unknown: [String: (example: String, count: Int)] = [:]
@@ -1805,7 +1805,7 @@ extension Sorter {
                     let ext = e.url.pathExtension.lowercased()
                     if e.isLink { symlinks += 1; continue }
                     if e.isDir {
-                        if Self.projectExt.contains(ext) { found.append(Item(cam: cam, url: e.url, ext: ext)); continue }
+                        if Self.projectExt.contains(ext) { if !FCPLibraryBuilder.isOwnOutput(e.url) { found.append(Item(cam: cam, url: e.url, ext: ext)) }; continue }
                         if e.isPackage { continue }
                         if FolderNames.isOrientation(name) || skip.contains(FolderNames.fold(name)) { continue }
                         // Sony-Proxys (M4ROOT/SUB) und Vorschaubilder nicht als Clips einsortieren
@@ -1821,7 +1821,7 @@ extension Sorter {
         }
         if symlinks > 0 { hints.append("\(plural(symlinks, "Verknüpfung (Alias/Symlink)", "Verknüpfungen (Alias/Symlink)")) übersprungen") }
         if proxyDirs > 0 { hints.append("Sony-Proxy-/Vorschau-Ordner (SUB, THMBNL) unverändert gelassen") }
-        fcpLibraries = found.filter { $0.ext == "fcpbundle" }.map(\.url)
+        fcpLibraries = found.filter { $0.ext == "fcpbundle" }.map(\.url) + FCPLibraryBuilder.ownLibraries(in: folders)   // eigene Mediathek (CamSort) mit Neu-Verknüpfen-Hinweis
 
         // 2) Unbekannte Dateitypen erfragen (wie sonst auch)
         var unknown: [String: (example: String, count: Int)] = [:]

@@ -622,6 +622,9 @@ struct DoneView: View {
             if !cancelled && !sorter.fcpLibraries.isEmpty && sorter.movedVideos > 0 {
                 FCPRelinkCard(libraries: sorter.fcpLibraries)
             }
+            if !cancelled {
+                FCPLibraryCard(folders: sorter.folders, suffixes: store.gyroSuffixList, gyroBusy: gyro.state == .running || gyro.state == .paused)
+            }
             if !cancelled && selEnabled {
                 HStack(spacing: 8) {
                     Button { selects.start(folders: sorter.folders, suffixes: store.gyroSuffixList) } label: {
@@ -1115,6 +1118,9 @@ struct SettingsView: View {
                         Text("Ordner für Exporte, Soundeffekte & Co.").font(.system(size: 12))
                     }
                     SpecialFoldersEditor()
+
+                    section("Final Cut")
+                    FCPLibrarySettings()
 
                     section("Beste Momente")
                     SelectsSettingsBlock()

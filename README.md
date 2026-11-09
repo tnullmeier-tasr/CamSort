@@ -102,6 +102,18 @@ Aus deinem Preset übernimmt CamSort **nur Glättung und dynamisches Zoomen**. O
 
 Aus: Preset komplett wie früher. Einstellbar unter *Einstellungen › Gyroflow*.
 
+## Final-Cut-Mediathek aus dem Ordner
+
+Nach dem Sortieren legt CamSort auf Wunsch aus jedem Dreh- bzw. Projektordner eine **gleichnamige Final-Cut-Mediathek** an (`Pitbike/Pitbike.fcpbundle`):
+
+- CamSort schreibt `Pitbike.fcpxml` (FCPXML 1.10) in den Ordner und öffnet sie in Final Cut. Die Importoption `library location` sorgt dafür, dass Final Cut die Mediathek genau dort neu anlegt (bzw. öffnet, wenn es sie schon gibt); `copy assets = 0` verknüpft die Medien nur – **nichts wird kopiert oder verändert**.
+- Ein Ereignis mit dem Ordnernamen, darin alle Clips (stabilisierte Fassung mit Schlagwort „Stabilisiert“, Original zusätzlich mit „Original“ – abschaltbar), Fotos (abschaltbar, Schlagwort „Foto“) und Musik/Soundeffekte (Rolle Musik bzw. Effekte).
+- **Schlagwörter aus der Ordnerstruktur:** Kamera, Objektiv, Hochkant/Quer/Quadratisch, Framerate („50 fps“), Länge, Szene, eigene Ordner – plus vorhandene Finder-Tags. In Final Cut erscheinen sie links als Schlagwortsammlungen.
+- Gibt es die Mediathek schon, kommen nur neue Clips als Ereignis „Pitbike – Nachtrag <Datum>“ dazu. Welche Dateien schon drin sind, steht in der unsichtbaren Datei `.camsort-fcp.json`.
+- Einstellungen › Final Cut: „Nach dem Sortieren Mediathek anlegen“ (Fragen / Immer / Nie), „Fotos aufnehmen“, „Originale neben stabilisierten aufnehmen“. Läuft Gyroflow noch, wird die Mediathek danach angelegt.
+- Die `.fcpxml`, die Mediathek und `.camsort-fcp.json` bleiben beim erneuten Sortieren liegen und werden beim Rückgängigmachen nicht gelöscht. Nach „Neu ordnen“/Rückgängig zeigt CamSort den Hinweis zum Neu-Verknüpfen auch für diese Mediathek.
+- Ohne Final Cut: Die FCPXML liegt bereit – in Final Cut über *Ablage › Importieren › XML …* öffnen.
+
 ## Gyroflow-Preset einrichten (einmalig)
 1. Gyroflow öffnen, einen Sony-Clip hineinziehen, Einstellungen wie gewohnt.
 2. Kleiner Pfeil am Knopf **Export** → **Create settings preset**.
