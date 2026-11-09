@@ -30,6 +30,12 @@ final class GyroRunner: ObservableObject {
     private var cancelled = false
     private var pauseRequested = false
     private var lastOutput = ""
+    /// Komplette Ausgabe des aktuellen Clips (für die Log-Datei)
+    private var fullOutput = ""
+    /// Log-Datei des zuletzt gescheiterten Clips (Knopf „Log zeigen“)
+    @Published var lastLogURL: URL?
+    /// Preset-Variante: reduziert (+ -p) oder – nach einem Fallback – komplett mit Ausgabegröße
+    enum PresetVariant { case reduced, full }
 
     init(store: LearnedStore, sorter: Sorter) { self.store = store; self.sorter = sorter }
 
@@ -201,6 +207,12 @@ final class GyroRunner: ObservableObject {
             state = .failed("Gyroflow wurde nicht gefunden. Bitte unter Einstellungen › Gyroflow die Gyroflow-App auswählen.")
             return
         }
+        // App-Store-Version (Sandbox) vor dem ersten Clip sicher erkennen statt raten
+        let sb = await Self.sandboxInfo(app: app)
+        if sb.sandboxed {
+            state = .failed(Self.sandboxMessage(app: app, evidence: sb.evidence))
+            return
+        }
         store.migratePresetIfNeeded()
         let preset = store.gyroPresetPath
         guard !preset.isEmpty else {
@@ -243,7 +255,8 @@ final class GyroRunner: ObservableObject {
         index = 0
         state = .running
         eta.begin()
-        Task { await runAll(exe: exe, preset: usedPreset, hochkantCount: clips.hochkant.count, folders: folders) }
+        lastLogURL = nil
+        Task { await runAll(exe: exe, preset: usedPreset, originalPreset: preset, hochkantCount: clips.hochkant.count, folders: folders) }
     }
 
     nonisolated static func isPortraitFolder(_ u: URL) async -> Bool {
@@ -306,6 +319,19 @@ final class GyroRunner: ObservableObject {
     /// übernimmt die Rotation selbst), gleiche Codec-Familie, Bitrate ≈ Quelle, Ton an (Original kopieren, sonst AAC).
     /// Framerate: Gyroflow rendert immer mit der Quell-Framerate (kein -p-Schlüssel dafür nötig).
     nonisolated static func outputParams(for clip: URL) async -> String? {
+        guard let p = await outputParamsDict(for: clip) else { return nil }
+        return jsonString(p)
+    }
+
+    /// JSON ohne einfache Anführungszeichen: Gyroflow ersetzt in -p und Inline-Presets ' durch " (cli.rs) –
+    /// deshalb ' als \u0027 maskieren, sonst wird das JSON kaputt und Gyroflow bricht mit „Invalid json“-Panic ab.
+    nonisolated static func jsonString(_ obj: [String: Any]) -> String? {
+        guard let d = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+              let s = String(data: d, encoding: .utf8) else { return nil }
+        return s.replacingOccurrences(of: "'", with: "\\u0027")
+    }
+
+    nonisolated static func outputParamsDict(for clip: URL) async -> [String: Any]? {
         let a = AVURLAsset(url: clip)
         guard let found = try? await a.loadTracks(withMediaType: .video), let t = found.first,
               let props = try? await t.load(.naturalSize, .estimatedDataRate, .formatDescriptions) else { return nil }
@@ -326,15 +352,134 @@ final class GyroRunner: ObservableObject {
             p["codec"] = "H.265/HEVC"   // HEVC und alles andere
         }
         if p["codec"] as? String != "ProRes" {
-            // Mbit/s, aufgerundet, mindestens 10 (Gyroflow nimmt ohnehin max(Vorgabe, Quellbitrate))
+            // Mbit/s, aufgerundet, mindestens 10 – RenderOptions.bitrate ist f64 (render_queue.rs), daher als Double
             let mbps = Double(props.1) / 1_000_000
-            p["bitrate"] = max(10, Int(mbps.rounded(.up)))
+            p["bitrate"] = Double(max(10, Int(mbps.rounded(.up))))
         }
-        guard let d = try? JSONSerialization.data(withJSONObject: p, options: [.sortedKeys]) else { return nil }
-        return String(data: d, encoding: .utf8)
+        return p
     }
 
-    private func runAll(exe: URL, preset: String, hochkantCount: Int, folders: [URL]) async {
+    /// Komplettes Original-Preset als Inline-JSON, nur die Ausgabegröße ersetzt. Inline, weil das Preset in apply_to_all
+    /// nach -p angewendet wird und dessen "output" sonst die Größe überschreiben würde (render_queue.rs apply_to_all).
+    nonisolated static func fullPresetInline(original: String, width: Int, height: Int) -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: original)),
+              var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        var out = obj["output"] as? [String: Any] ?? [:]
+        out["output_width"] = width; out["output_height"] = height
+        obj["output"] = out
+        return jsonString(obj)
+    }
+
+    /// Inhalt einer Preset-Datei als Inline-JSON (Gyroflow muss dann keine Datei lesen: cli.rs liest Presets sonst mit
+    /// `read_to_string(preset).expect("Reading preset file")` – ein Lesefehler ist ein Panic = Exit-Code 101).
+    nonisolated static func presetInline(_ path: String) -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        return jsonString(obj)
+    }
+
+    // MARK: App-Store-/Sandbox-Erkennung
+
+    struct SandboxInfo { let sandboxed: Bool; let evidence: String }
+
+    /// Eindeutig statt geraten: App-Store-Beleg (Contents/_MASReceipt/receipt) oder Entitlement com.apple.security.app-sandbox.
+    nonisolated static func sandboxInfo(app: URL) async -> SandboxInfo {
+        if FileManager.default.fileExists(atPath: app.appendingPathComponent("Contents/_MASReceipt/receipt").path) {
+            return SandboxInfo(sandboxed: true, evidence: "App-Store-Beleg (_MASReceipt) im App-Paket")
+        }
+        let out = await runTool("/usr/bin/codesign", ["-d", "--entitlements", ":-", app.path])
+        if entitlementsSandboxed(out) {
+            return SandboxInfo(sandboxed: true, evidence: "Entitlement com.apple.security.app-sandbox")
+        }
+        return SandboxInfo(sandboxed: false, evidence: "")
+    }
+
+    /// Entitlements-Plist (XML) auswerten: Schlüssel app-sandbox mit <true/>
+    nonisolated static func entitlementsSandboxed(_ plist: String) -> Bool {
+        guard let r = plist.range(of: "com.apple.security.app-sandbox") else { return false }
+        // nur bis zum nächsten Schlüssel schauen (sonst zählt das <true/> eines anderen Entitlements)
+        var after = String(plist[r.upperBound...].prefix(200))
+        if let next = after.range(of: "<key>") { after = String(after[..<next.lowerBound]) }
+        return after.contains("<true/>")
+    }
+
+    nonisolated static func sandboxMessage(app: URL, evidence: String) -> String {
+        "Diese Gyroflow-App („\(app.lastPathComponent)“) ist die App-Store-Version (\(evidence)). Sie läuft in Apples Sandbox und darf weder deine Clips noch das Preset aus „~/Library/Application Support/CamSort“ lesen – CamSort kann sie deshalb nicht steuern.\n\nSo geht’s: 1. Gyroflow kostenlos von gyroflow.xyz laden und in „Programme“ legen. 2. CamSort › Einstellungen › Gyroflow › Gyroflow-App wählen und diese Version auswählen. 3. Erneut stabilisieren."
+    }
+
+    /// Kommandozeilen-Werkzeug im Hintergrund ausführen (blockiert nie den Main-Thread), stdout+stderr zurück
+    nonisolated static func runTool(_ path: String, _ args: [String]) async -> String {
+        await Task.detached(priority: .utility) { () -> String in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: path)
+            p.arguments = args
+            let pipe = Pipe()
+            p.standardOutput = pipe; p.standardError = pipe
+            p.standardInput = FileHandle.nullDevice
+            do { try p.run() } catch { return "" }
+            let d = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            return String(decoding: d, as: UTF8.self)
+        }.value
+    }
+
+    // MARK: Log & Fehlermeldung
+
+    nonisolated static var logDir: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
+        return base.appendingPathComponent("CamSort/Gyroflow-Logs", isDirectory: true)
+    }
+
+    /// Argument für die Log-Zeile shell-tauglich quoten
+    nonisolated static func shellQuote(_ a: String) -> String {
+        let special = a.contains { $0 == " " || $0 == "\"" || $0 == "'" || $0 == "{" || $0 == "(" }
+        return special ? "'" + a.replacingOccurrences(of: "'", with: "'\\''") + "'" : a
+    }
+
+    /// Log je Clip: Kommandozeile mit allen Argumenten, komplette Ausgabe, Exit-Code
+    nonisolated static func writeLog(clip: URL, exe: URL, args: [String], output: String, status: Int32, note: String) -> URL? {
+        let f = DateFormatter(); f.locale = Locale(identifier: "de_DE"); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let url = logDir.appendingPathComponent("\(f.string(from: Date()))_\(clip.deletingPathExtension().lastPathComponent).log")
+        let lines: [String] = [
+            "CamSort – Gyroflow-Log",
+            "Clip: \(clip.path)",
+            "Variante: \(note)",
+            "Exit-Code: \(status)" + (status == 101 ? " (Rust-Panic in Gyroflow)" : ""),
+            "",
+            "Kommandozeile:",
+            ([exe.path] + args).map(shellQuote).joined(separator: " "),
+            "",
+            "---- Ausgabe (stdout + stderr) ----",
+            output,
+        ]
+        do {
+            try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch { return nil }
+    }
+
+    /// Aussagekräftige Zeilen: MDK-Banner/Copyright/„Build for“ und Fortschritt raus, Fehlerzeilen bevorzugt
+    nonisolated static func meaningfulLines(_ out: String, max n: Int = 3) -> [String] {
+        let noise = ["multimedia development kit", "copyright", "build for", "wangbin", "mdk-sdk", "github.com/wang-bin"]
+        let lines = out.components(separatedBy: CharacterSet.newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { l in
+                guard !l.isEmpty else { return false }
+                let low = l.lowercased()
+                if noise.contains(where: { low.contains($0) }) { return false }
+                if l.range(of: #"^[\d.\s%/:|]+$"#, options: .regularExpression) != nil { return false }   // reiner Fortschritt
+                return true
+            }
+        let keys = ["error", "failed", "panic", "denied", "not permitted", "unable", "invalid", "cannot", "can't"]
+        let hot = lines.filter { l in let low = l.lowercased(); return keys.contains { low.contains($0) } }
+        return Array((hot.isEmpty ? lines : hot).suffix(n))
+    }
+
+    private func runAll(exe: URL, preset: String, originalPreset: String, hochkantCount: Int, folders: [URL]) async {
+        var variant: PresetVariant = store.gyroMatchSource && preset != originalPreset ? .reduced : .full
+        var fallbackTried = false
         while index < queue.count {
             if cancelled { break }
             while pauseRequested && !cancelled { try? await Task.sleep(nanoseconds: 300_000_000) }
@@ -343,14 +488,24 @@ final class GyroRunner: ObservableObject {
             currentGroup = index < hochkantCount ? "Hochkant" : "Quer"
             currentFile = clip.lastPathComponent
             filePercent = 0
-            let ok = await render(exe: exe, clip: clip, preset: preset)
+            var res = await render(exe: exe, clip: clip, preset: preset, originalPreset: originalPreset, variant: variant)
             if cancelled { break }
-            if ok { done.append(clip.lastPathComponent) }
+            // Fallback: reduziertes Preset + -p gescheitert → EINMAL mit komplettem Original-Preset (nur Ausgabegröße) versuchen
+            if !res.ok && variant == .reduced && !fallbackTried {
+                fallbackTried = true
+                let retry = await render(exe: exe, clip: clip, preset: preset, originalPreset: originalPreset, variant: .full)
+                if cancelled { break }
+                if retry.ok {
+                    variant = .full
+                    res = retry
+                    errors.append("Hinweis – \(clip.lastPathComponent): Gyroflow akzeptierte die Ausgabe-Parameter nicht – mit komplettem Preset gerendert (gilt für den Rest des Laufs).")
+                }
+            }
+            if res.ok { done.append(clip.lastPathComponent) } else { errors.append(res.message) }
             index += 1
-            // App-Store-Sperre o. Ä.: sofort beim ersten Clip abbrechen statt alles fehlschlagen zu lassen
-            if !ok && done.isEmpty && index == 1 && lastOutput.lowercased().contains("not permitted") {
-                state = .failed("Gyroflow lässt sich von CamSort nicht steuern (vermutlich die App-Store-Version mit Apples Sandbox). Abhilfe: Gyroflow von gyroflow.xyz installieren.")
-                return
+            // Nur Zusatzhinweis – die eigentliche App-Store-Erkennung läuft vor dem Start
+            if !res.ok && done.isEmpty && index == 1 && fullOutput.lowercased().contains("not permitted") {
+                errors.append("Hinweis: Gyroflow meldet „Operation not permitted“ – fehlender Zugriff (Sandbox oder Datenschutz-Freigabe für Ordner/Laufwerk). Details im Log.")
             }
         }
         currentFile = ""
@@ -367,48 +522,69 @@ final class GyroRunner: ObservableObject {
         }
     }
 
-    private func render(exe: URL, clip: URL, preset: String) async -> Bool {
+    private func render(exe: URL, clip: URL, preset: String, originalPreset: String, variant: PresetVariant) async -> (ok: Bool, message: String) {
         let suffix = store.gyroSuffixList.first ?? "_stabilized"
         let p = Process()
         p.executableURL = exe
-        var args = [clip.path, "--preset", preset, "-t", suffix, "-f", "--stdout-progress"]
-        // Ausgabe wie Eingabeclip: Größe/Codec/Bitrate/Ton pro Clip über -p/--out-params (gyroflow src/cli.rs).
-        // Echtes JSON mit doppelten Anführungszeichen; als einzelnes Process-Argument, keine Shell.
-        if store.gyroMatchSource, let json = await Self.outputParams(for: clip) {
-            args += ["-p", json]
+        // Preset inline übergeben (Gyroflow liest dann keine Datei → kein „Reading preset file“-Panic)
+        var presetArg = Self.presetInline(preset) ?? preset
+        var note = "Preset: " + (preset as NSString).lastPathComponent
+        var outParams: String? = nil
+        if store.gyroMatchSource {
+            if variant == .reduced {
+                // Ausgabe wie Eingabeclip: Größe/Codec/Bitrate/Ton pro Clip über -p/--out-params (gyroflow src/cli.rs).
+                outParams = await Self.outputParams(for: clip)
+                note += " (reduziert) + -p"
+            } else if let d = await Self.outputParamsDict(for: clip), let w = d["output_width"] as? Int, let h = d["output_height"] as? Int,
+                      let full = Self.fullPresetInline(original: originalPreset, width: w, height: h) {
+                presetArg = full
+                note = "Preset: " + (originalPreset as NSString).lastPathComponent + " (komplett, nur Ausgabegröße \(w)×\(h))"
+            }
         }
+        var args = [clip.path, "--preset", presetArg, "-t", suffix, "-f", "--stdout-progress"]
+        if let json = outParams { args += ["-p", json] }
         p.arguments = args
         p.standardInput = FileHandle.nullDevice   // keine Rückfragen – nichts kann auf Eingabe warten
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe
-        lastOutput = ""
+        lastOutput = ""; fullOutput = ""
         pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
             guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
             Task { @MainActor in self?.handleOutput(s) }
         }
         do { try p.run() } catch {
-            errors.append("\(clip.lastPathComponent): Gyroflow konnte nicht gestartet werden (\(error.localizedDescription))")
-            return false
+            return (false, "\(clip.lastPathComponent): Gyroflow konnte nicht gestartet werden (\(error.localizedDescription))")
         }
         process = p
         while p.isRunning { try? await Task.sleep(nanoseconds: 250_000_000) }
-        pipe.fileHandleForReading.readabilityHandler = nil
+        let reader = pipe.fileHandleForReading
+        reader.readabilityHandler = nil
+        // Rest der Ausgabe im Hintergrund lesen (Prozess ist beendet → EOF)
+        let rest = await Task.detached { () -> Data in reader.readDataToEndOfFile() }.value
+        if !rest.isEmpty { handleOutput(String(decoding: rest, as: UTF8.self)) }
         process = nil
-        if cancelled { return false }
+        if cancelled { return (false, "") }
         let out = clip.deletingLastPathComponent()
         let stem = clip.deletingPathExtension().lastPathComponent
         let produced = ((try? FileManager.default.contentsOfDirectory(atPath: out.path)) ?? [])
             .contains { $0.hasPrefix(stem + suffix) }
-        if p.terminationStatus == 0 && produced { filePercent = 1; return true }
-        let tail = lastOutput.split(separator: "\n").suffix(2).joined(separator: " ")
-        errors.append("\(clip.lastPathComponent): Gyroflow-Fehler (Code \(p.terminationStatus))\(tail.isEmpty ? "" : " – " + tail)")
-        return false
+        let status = p.terminationStatus
+        let log = Self.writeLog(clip: clip, exe: exe, args: args, output: fullOutput, status: status, note: note)
+        if status == 0 && produced { filePercent = 1; return (true, "") }
+        if let log { lastLogURL = log }
+        var lines = Self.meaningfulLines(fullOutput)
+        if status == 0 && !produced { lines.append("keine Ausgabedatei „\(stem + suffix)…“ entstanden") }
+        let panic = status == 101 ? " – Gyroflow ist abgestürzt (Rust-Panic)" : ""
+        let detail = lines.isEmpty ? " – keine Fehlermeldung von Gyroflow" : " – " + lines.joined(separator: " | ")
+        let logNote = log.map { " (Log: \($0.lastPathComponent))" } ?? ""
+        return (false, "\(clip.lastPathComponent): Gyroflow-Fehler (Code \(status))\(panic)\(detail)\(logNote)")
     }
 
     private func handleOutput(_ s: String) {
         lastOutput = String((lastOutput + s).suffix(2000))
+        if fullOutput.utf8.count < 8_000_000 { fullOutput += s }
         // Fortschritt als Prozent oder als „aktuell/gesamt“ erkennen
         if let r = s.range(of: #"(\d{1,3}(\.\d+)?)\s*%"#, options: .regularExpression, range: nil, locale: nil) {
             let n = s[r].filter { "0123456789.".contains($0) }
@@ -442,7 +618,7 @@ final class GyroRunner: ObservableObject {
         pauseRequested = false
     }
 
-    func close() { state = .idle; queue = []; errors = []; done = [] }
+    func close() { state = .idle; queue = []; errors = []; done = []; lastLogURL = nil }
 }
 
 // MARK: - Ansicht
@@ -516,6 +692,11 @@ struct GyroView: View {
                 }
                 .frame(maxHeight: 110).padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Theme.orange.opacity(0.12)))
+                if let log = gyro.lastLogURL {
+                    Button { NSWorkspace.shared.activateFileViewerSelecting([log]) } label: {
+                        Label("Log zeigen", systemImage: "doc.text.magnifyingglass")
+                    }.buttonStyle(.bordered).controlSize(.small)
+                }
             }
 
             Spacer(minLength: 0)

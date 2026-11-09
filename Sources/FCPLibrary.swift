@@ -52,7 +52,9 @@ final class FCPLibraryBuilder: ObservableObject {
     /// Rückfrage für diesen Lauf beantwortet / Anlegen wartet auf Gyroflow
     @Published var answered = false
     @Published var waitingForGyro = false
-    private var lastFolders: [URL] = []
+    private(set) var lastFolders: [URL] = []
+    /// Warum es keine Pläne gibt (für die Karte)
+    @Published var emptyReason: String = ""
 
     // Einstellungen
     private static let d = UserDefaults.standard
@@ -65,9 +67,12 @@ final class FCPLibraryBuilder: ObservableObject {
     var busy: Bool { state == .scanning || state == .writing }
 
     /// Neuer Lauf (DoneView erscheint): Rückfrage wieder zulassen
-    func resetForRun(_ folders: [URL]) {
-        guard folders != lastFolders || state == .idle else { return }
-        lastFolders = folders
+    func resetForRun(_ folders: [URL], force: Bool = false) {
+        let norm = folders.map { $0.standardizedFileURL }
+        guard force || norm != lastFolders || state == .idle else { return }
+        guard !busy else { return }
+        lastFolders = norm
+        emptyReason = ""
         answered = false; waitingForGyro = false
         outputs = []; messages = []; errors = []; plans = []; state = .idle
     }
@@ -84,6 +89,10 @@ final class FCPLibraryBuilder: ObservableObject {
             if let p = Self.plan(dreh: dr, excluding: others, suffixes: suffixes, photos: ph, originals: orig) { out.append(p) }
         }
         plans = out
+        if folders.isEmpty { emptyReason = "Kein Ordner gewählt." }
+        else if drehs.isEmpty { emptyReason = "In \(folders.map(\.lastPathComponent).joined(separator: ", ")) liegen keine sortierten Clips (erwartet: „Videos/…“ oder Kameraordner mit Hochkant/Quer)." }
+        else if out.isEmpty { emptyReason = "Die Dreh-Ordner \(drehs.map(\.lastPathComponent).joined(separator: ", ")) enthalten keine passenden Medien." }
+        else { emptyReason = "" }
         state = .ready
     }
 
@@ -94,12 +103,38 @@ final class FCPLibraryBuilder: ObservableObject {
             guard let en = FileManager.default.enumerator(at: f, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
             while let u = en.nextObject() as? URL {
                 guard Sorter.videoExt.contains(u.pathExtension.lowercased()), FolderNames.isSortedVideoPath(u.pathComponents) else { continue }
-                let own = !u.pathComponents.contains(where: FolderNames.isVideos)
-                let d = (own ? f : Sorter.drehRoot(u.deletingLastPathComponent())).standardizedFileURL
+                let d: URL
+                if let p = projectFolder(of: u, below: f) {
+                    d = p   // Projekt-Trennung: eine Mediathek je Projektordner (.camsort-projekt)
+                } else {
+                    let own = !u.pathComponents.contains(where: FolderNames.isVideos)
+                    d = (own ? f : Sorter.drehRoot(u.deletingLastPathComponent())).standardizedFileURL
+                }
                 if !set.contains(d) { set.append(d) }
             }
         }
         return set.sorted { $0.path < $1.path }
+    }
+
+    /// Nächster Ordner mit `.camsort-projekt` zwischen dem gewählten Ordner `base` (einschließlich) und dem Clip
+    nonisolated static func projectFolder(of clip: URL, below base: URL) -> URL? {
+        let fm = FileManager.default
+        let b = base.standardizedFileURL.pathComponents
+        var dir = clip.deletingLastPathComponent().standardizedFileURL
+        while dir.pathComponents.count >= b.count {
+            if fm.fileExists(atPath: dir.appendingPathComponent(Sorter.projectMarker).path) { return dir }
+            if dir.pathComponents.count == b.count { break }
+            dir = dir.deletingLastPathComponent().standardizedFileURL
+        }
+        return nil
+    }
+
+    /// Enthält der Ordner (oder er selbst) Projektordner von CamSort?
+    nonisolated static func hasProjectFolders(_ base: URL) -> Bool {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: base.appendingPathComponent(Sorter.projectMarker).path) { return true }
+        let kids = (try? fm.contentsOfDirectory(atPath: base.path)) ?? []
+        return kids.contains { !$0.hasPrefix(".") && fm.fileExists(atPath: base.appendingPathComponent($0).appendingPathComponent(Sorter.projectMarker).path) }
     }
 
     nonisolated static func libraryURL(_ dreh: URL) -> URL {
@@ -461,9 +496,9 @@ struct FCPLibraryCard: View {
     }
 
     var body: some View {
-        Group {
-            if !lib.plans.isEmpty || lib.state == .finished || lib.busy {
-                VStack(alignment: .leading, spacing: 8) {
+        // Wichtig: immer eine echte View rendern – an einer leeren Group feuert .onAppear nicht,
+        // dann lief prepare() nie und die Karte blieb für immer unsichtbar.
+        VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Image(systemName: "film.stack")
                         Text("Final-Cut-Mediathek").font(.system(size: 13, weight: .bold))
@@ -490,7 +525,12 @@ struct FCPLibraryCard: View {
                             }
                         }
                     default:
-                        if lib.waitingForGyro {
+                        if lib.plans.isEmpty && lib.state == .ready {
+                            Text("Keine Clips für eine Mediathek gefunden").font(.system(size: 12, weight: .semibold))
+                            if !lib.emptyReason.isEmpty {
+                                Text(lib.emptyReason).font(.system(size: 11)).foregroundStyle(.white.opacity(0.7)).fixedSize(horizontal: false, vertical: true)
+                            }
+                        } else if lib.waitingForGyro {
                             HStack { ProgressView().controlSize(.small); Text("Wird angelegt, sobald Gyroflow fertig ist – dann mit den stabilisierten Clips.").font(.system(size: 12)) }
                         } else if allUpToDate {
                             Text("Mediathek ist aktuell – alle Medien sind schon drin.").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
@@ -504,9 +544,10 @@ struct FCPLibraryCard: View {
                             }.controlSize(.small)
                         }
                     }
-                    if !lib.busy && !lib.waitingForGyro && !(lib.mode == "ask" && !lib.answered && lib.state == .ready) && !allUpToDate {
+                    if !lib.busy && !lib.waitingForGyro && !(lib.mode == "ask" && !lib.answered && lib.state == .ready && !lib.plans.isEmpty) && !allUpToDate {
                         Button { start() } label: {
-                            Label(anyAddition ? "Neue Clips zur Mediathek hinzufügen (\(lib.totalNew))" : "Final-Cut-Mediathek anlegen: \(title)", systemImage: "film.stack")
+                            Label(lib.plans.isEmpty ? "Final-Cut-Mediathek anlegen"
+                                  : anyAddition ? "Neue Clips zur Mediathek hinzufügen (\(lib.totalNew))" : "Final-Cut-Mediathek anlegen: \(title)", systemImage: "film.stack")
                                 .lineLimit(1).truncationMode(.middle)
                                 .frame(maxWidth: .infinity).frame(height: 40)
                                 .background(RoundedRectangle(cornerRadius: 12).fill(Theme.orange.opacity(0.35)))
@@ -517,17 +558,19 @@ struct FCPLibraryCard: View {
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 12).fill(Theme.orange.opacity(0.12)))
-            }
-        }
-        .onAppear {
-            lib.resetForRun(folders)
-            if lib.state == .idle { lib.prepare(folders: folders, suffixes: suffixes) }
-            if lib.mode == "always" && !lib.answered && lib.totalNew > 0 { start() }
-        }
+        .onAppear { refresh() }
+        .onChange(of: folders) { _, _ in refresh() }
         .onChange(of: gyroBusy) { _, busy in
             if !busy && lib.waitingForGyro { Task { await lib.build(folders: folders, suffixes: suffixes) } }
             else if !busy && lib.state == .ready { lib.prepare(folders: folders, suffixes: suffixes) }   // stabilisierte Clips sind neu
         }
+    }
+
+    /// Neue Ordnerliste → Singleton-Zustand zurücksetzen und neu planen
+    private func refresh() {
+        lib.resetForRun(folders)
+        if lib.state == .idle { lib.prepare(folders: folders, suffixes: suffixes) }
+        if lib.mode == "always" && !lib.answered && lib.totalNew > 0 { start() }
     }
 
     private func start() {
@@ -556,5 +599,36 @@ struct FCPLibrarySettings: View {
             }
         }
         .toggleStyle(.switch).font(.system(size: 12)).controlSize(.small)
+    }
+}
+
+
+// MARK: - Startbildschirm: Mediathek für einen schon sortierten Ordner
+
+struct FCPLibraryQuickRow: View {
+    let folder: URL
+    let suffixes: [String]
+    @ObservedObject var lib = FCPLibraryBuilder.shared
+
+    private var mine: Bool { lib.lastFolders == [folder.standardizedFileURL] }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "film.stack").foregroundStyle(.white.opacity(0.6))
+            if mine && lib.busy {
+                ProgressView().controlSize(.small)
+                Text(lib.state == .scanning ? "Lese Medien …" : "Schreibe Final-Cut-Datei …")
+            } else if mine, lib.state == .finished || lib.state == .ready, let line = (lib.errors + lib.messages).first ?? (lib.plans.isEmpty && !lib.emptyReason.isEmpty ? lib.emptyReason : nil) {
+                Text(line).lineLimit(2).foregroundStyle(lib.errors.isEmpty ? Color.white.opacity(0.7) : Theme.orange)
+            }
+            Spacer()
+            Button("Final-Cut-Mediathek anlegen") {
+                lib.resetForRun([folder], force: true)
+                Task { await lib.build(folders: [folder], suffixes: suffixes) }
+            }
+            .buttonStyle(.link)
+            .disabled(lib.busy)
+        }
+        .font(.system(size: 11))
     }
 }

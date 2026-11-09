@@ -732,6 +732,45 @@ struct E2E {
             store.projectMode = "never"; store.compactLayout = false
         }
 
+        // 6b2) Final-Cut-Mediathek: Projekt-Trennung + Modus „Meine Kameraordner“ → eine Mediathek je Projektordner
+        do {
+            let fmx = FileManager.default
+            let x = root.deletingLastPathComponent().appendingPathComponent("CamSort-Extra")
+            let pk = root.deletingLastPathComponent().appendingPathComponent("CamSort-Projekte-Kamera")
+            try? fmx.removeItem(at: pk)
+            let names = ["2026-11-08 Wörth Pitbike", "2026-11-08 DOC tag der offenen Tür"]
+            for (i, n) in names.enumerated() {
+                let cam = pk.appendingPathComponent(n).appendingPathComponent("A1/\(i == 0 ? "Hochkant" : "Quer")")
+                try? fmx.createDirectory(at: cam, withIntermediateDirectories: true)
+                try? "{}".write(to: pk.appendingPathComponent(n).appendingPathComponent(Sorter.projectMarker), atomically: true, encoding: .utf8)
+                try? fmx.copyItem(at: x.appendingPathComponent(i == 0 ? "P1000.MP4" : "P1500.MP4"), to: cam.appendingPathComponent("C000\(i).MP4"))
+            }
+            let lib = FCPLibraryBuilder.shared
+            lib.resetForRun([pk], force: true)
+            lib.prepare(folders: [pk], suffixes: store.gyroSuffixList)
+            let got = lib.plans.map(\.name).sorted()
+            check(got == names.sorted(), "Mediathek: Projekt-Trennung + Kameraordner → 2 Pläne mit Projektnamen (\(got))")
+            check(lib.plans.allSatisfy { $0.library.lastPathComponent == $0.name + ".fcpbundle" }, "Mediathek: je Projektordner gleichnamige Mediathek")
+            let empty = root.deletingLastPathComponent().appendingPathComponent("CamSort-Leer")
+            try? fmx.createDirectory(at: empty, withIntermediateDirectories: true)
+            lib.resetForRun([empty], force: true)
+            lib.prepare(folders: [empty], suffixes: store.gyroSuffixList)
+            check(lib.plans.isEmpty && !lib.emptyReason.isEmpty, "Mediathek: ohne Clips → Grund „\(lib.emptyReason)“")
+            lib.resetForRun([], force: true)
+        }
+
+        // 6b3) Gyroflow: Fehlerzeilen ohne MDK-Banner, Sandbox-Entitlement erkennen
+        do {
+            let out = "0.40.1 (git a68cfbb) - Multimedia Development Kit\nCopyright (c) 2019-2025 WangBin\nBuild for: macOS110000/27.2.0\n12.5%\nthread 'main' panicked at src/cli.rs:288:62:\nReading preset file: Os { code: 1, kind: PermissionDenied, message: \"Operation not permitted\" }\n"
+            let lines = GyroRunner.meaningfulLines(out)
+            check(!lines.isEmpty && lines.allSatisfy { !$0.contains("Multimedia") && !$0.contains("Build for") } && lines.contains { $0.contains("not permitted") },
+                  "Gyroflow: aussagekräftige Fehlerzeilen statt MDK-Banner (\(lines))")
+            let ent = "<plist><dict><key>com.apple.security.app-sandbox</key><true/><key>x</key><false/></dict></plist>"
+            let ent2 = "<plist><dict><key>com.apple.security.app-sandbox</key><false/><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>"
+            check(GyroRunner.entitlementsSandboxed(ent) && !GyroRunner.entitlementsSandboxed(ent2), "Gyroflow: Sandbox-Entitlement sicher erkannt")
+            check(GyroRunner.jsonString(["title": "Tim's Preset"])?.contains("'") == false, "Gyroflow: Inline-JSON ohne einfache Anführungszeichen")
+        }
+
         // 6g) Videos-Sammelordner abschaltbar, eigene Kameraordner (E1 neben A1) sind kein Dreh, Neu ordnen bei geänderten Einstellungen
         do {
             let fmx = FileManager.default

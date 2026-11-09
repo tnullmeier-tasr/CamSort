@@ -393,6 +393,9 @@ struct IdleView: View {
                         if let runs = sorter.folderRuns[f.path], !runs.isEmpty {
                             FolderRunsView(runs: runs).padding(.horizontal, 14)
                         }
+                        if Sorter.looksSorted(f) || FCPLibraryBuilder.hasProjectFolders(f) || store.ownCameraFolders {
+                            FCPLibraryQuickRow(folder: f, suffixes: store.gyroSuffixList).padding(.horizontal, 14)
+                        }
                     }
                 }
                 .frame(maxHeight: 200)
