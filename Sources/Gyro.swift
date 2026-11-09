@@ -130,6 +130,8 @@ final class GyroRunner: ObservableObject {
         if isSony(url) { return "Sony" }
         let data = headTail(url)
         func has(_ s: String) -> Bool { data.range(of: Data(s.utf8)) != nil }
+        // Sony ohne XML-Begleitdatei: Bewegungsdaten stecken in der Echtzeit-Metadatenspur „rtmd“ der MP4
+        if has("rtmd") && (has("Sony") || has("SONY")) { return "Sony" }
         if has("djmd") && has("DJI meta") { return "DJI" }
         if has("GPMFDEVC") || has("GoPro MET") { return "GoPro" }
         let magic = Data("8db42d694ccc418790edff439fe026bf".utf8)
