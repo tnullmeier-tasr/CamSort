@@ -18,3 +18,19 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 codesign --force --deep -s - "$APP"
 (cd build && ditto -c -k --keepParent CamSort.app CamSort.zip)
 echo "Fertig: build/CamSort.app"
+
+# ./build.sh install  → laufendes CamSort sauber beenden, neue Version nach /Applications kopieren und starten
+if [ "${1:-}" = "install" ]; then
+  if pgrep -x CamSort >/dev/null; then
+    echo "Beende laufendes CamSort …"
+    osascript -e 'tell application "CamSort" to quit' >/dev/null 2>&1 || true
+    for _ in $(seq 1 50); do pgrep -x CamSort >/dev/null || break; sleep 0.2; done
+    pkill -x CamSort 2>/dev/null || true
+    for _ in $(seq 1 25); do pgrep -x CamSort >/dev/null || break; sleep 0.2; done
+  fi
+  rm -rf /Applications/CamSort.app
+  ditto build/CamSort.app /Applications/CamSort.app
+  xattr -dr com.apple.quarantine /Applications/CamSort.app 2>/dev/null || true
+  open -n /Applications/CamSort.app
+  echo "Installiert und gestartet: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/CamSort.app/Contents/Info.plist)"
+fi
