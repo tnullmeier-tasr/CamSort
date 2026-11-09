@@ -192,7 +192,7 @@ final class Sorter: ObservableObject {
     private var videosRootCache: [String: URL] = [:]
     private let fm = FileManager.default
 
-    init(store: LearnedStore) { self.store = store; self.cfg = RunSettings(store) }
+    init(store: LearnedStore) { self.store = store; self.cfg = RunSettings(store); FolderNames.load() }
 
     /// Läuft gerade ein Lauf (Einlesen, Sortieren, Gyroflow-Trennung)?
     var isRunning: Bool { phase == .scanning || phase == .sorting }
@@ -319,6 +319,7 @@ final class Sorter: ObservableObject {
 
     func startGyro() {
         guard !folders.isEmpty else { return }
+        FolderNames.load()   // eigene Ordnernamen auch ohne vorheriges Sortieren
         cfg = RunSettings(store)
         clearResults(); processed = 0
         phase = .scanning

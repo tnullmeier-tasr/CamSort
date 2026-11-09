@@ -195,6 +195,7 @@ final class GyroRunner: ObservableObject {
 
     private func start(folders: [URL], clips list: [URL]?) async {
         guard !preparing else { return }
+        FolderNames.load()   // eigene Ordnernamen (Hochkant/Quer/Videos) für die Clip-Suche
         errors = []; done = []; cancelled = false; pauseRequested = false
         guard let app = appURL, let exe = executable(in: app) else {
             state = .failed("Gyroflow wurde nicht gefunden. Bitte unter Einstellungen › Gyroflow die Gyroflow-App auswählen.")
