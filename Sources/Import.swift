@@ -77,7 +77,8 @@ final class ImportRunner: ObservableObject {
         p.canChooseDirectories = true; p.canChooseFiles = false
         p.directoryURL = URL(fileURLWithPath: "/Volumes")
         p.message = "Speicherkarte (oder Ordner) wählen, von der importiert werden soll"
-        if p.runModal() == .OK, let u = p.url { setSource(u) }
+        NSApp.activate()
+        p.begin { [weak self] r in Task { @MainActor in if r == .OK, let u = p.url { self?.setSource(u) } } }
     }
 
     func chooseDestination() {
@@ -85,7 +86,8 @@ final class ImportRunner: ObservableObject {
         p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
         p.prompt = "Hierhin importieren"
         p.message = "Zielordner wählen – am besten ein neuer Ordner pro Projekt/Shooting"
-        if p.runModal() == .OK, let u = p.url { destination = u }
+        NSApp.activate()
+        p.begin { [weak self] r in Task { @MainActor in if r == .OK, let u = p.url { self?.destination = u } } }
     }
 
     // MARK: Tage ermitteln

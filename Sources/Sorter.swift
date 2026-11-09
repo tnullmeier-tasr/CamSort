@@ -170,14 +170,37 @@ final class Sorter: ObservableObject {
         }
     }
 
+    /// true, solange das Finder-Fenster zur Ordnerwahl offen ist (Startbildschirm pausiert dann seine Animation)
+    @Published var pickingFolder = false
+
+    /// Ordnerwahl ohne runModal: Das Finder-Fenster läuft seit macOS 15+ in einem eigenen Prozess und
+    /// bleibt beim Laden hängen, wenn die App währenddessen dauerhaft animiert. Daher begin { } (nicht blockierend),
+    /// App vorher aktivieren und den zuletzt benutzten Ordner vorwählen.
     func chooseFolders() {
+        guard !pickingFolder else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
         panel.prompt = "Auswählen"
         panel.message = "Welche Ordner sollen sortiert werden?"
-        if panel.runModal() == .OK { addFolders(panel.urls) }
+        if let last = UserDefaults.standard.string(forKey: "lastPickDir"), fm.fileExists(atPath: last) {
+            panel.directoryURL = URL(fileURLWithPath: last)
+        }
+        pickingFolder = true
+        NSApp.activate()
+        panel.begin { [weak self] resp in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pickingFolder = false
+                guard resp == .OK, !panel.urls.isEmpty else { return }
+                if let first = panel.urls.first {
+                    UserDefaults.standard.set(first.deletingLastPathComponent().path, forKey: "lastPickDir")
+                }
+                self.addFolders(panel.urls)
+            }
+        }
     }
 
     func reset() {

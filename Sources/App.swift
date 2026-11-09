@@ -268,6 +268,14 @@ struct IdleView: View {
             .onAppear {
                 withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) { pulse = true }
             }
+            .onChange(of: sorter.pickingFolder) { _, picking in
+                if picking {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { pulse = false }
+                } else {
+                    withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) { pulse = true }
+                }
+            }
 
             if !sorter.folders.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
