@@ -732,6 +732,13 @@ struct E2E {
             check(GyroRunner.displaySize(natural: CGSize(width: 3840, height: 2160), transform: CGAffineTransform(rotationAngle: .pi / 2)) == (2160, 3840),
                   "Ausgabegröße: Matrix 90° → angezeigte Maße 2160×3840 (getauscht)")
             check(GyroRunner.displaySize(natural: CGSize(width: 3840, height: 2160), transform: .identity) == (3840, 2160), "Ausgabegröße ohne Rotation unverändert")
+            check(GyroRunner.isDrone(URL(fileURLWithPath: "/D/Pitbike/Avata 2/Quer/DJI_0001.MP4"), source: "DJI")
+                  && GyroRunner.isDrone(URL(fileURLWithPath: "/D/Drohne/Quer/X.MP4"), source: nil)
+                  && !GyroRunner.isDrone(URL(fileURLWithPath: "/D/Osmo Action 6/Quer/DJI_0001.MP4"), source: "DJI")
+                  && !GyroRunner.isDrone(URL(fileURLWithPath: "/D/A1/Hochkant/C0001.MP4"), source: "Sony"), "Drohnen-Erkennung: Avata/Drohne ja, Osmo Action/Sony nein")
+            let lp = GyroRunner.withLowPass("{\"stabilization\":{\"method\":\"Default\"}}", hz: 50)
+            check(lp.contains("\"lpf\":50"), "Tiefpass 50 Hz wird ins Preset gesetzt (\(lp))")
+            check(GyroRunner.withLowPass("{\"gyro_source\":{\"lpf\":35}}", hz: 50).contains("35"), "Tiefpass aus dem Preset bleibt")
             check(GyroRunner.safeSuffix([]) == "_stabilized" && GyroRunner.safeSuffix(["  "]) == "_stabilized" && GyroRunner.safeSuffix(["_gyro"]) == "_gyro", "Suffix nie leer")
             let gd = root.deletingLastPathComponent().appendingPathComponent("CamSort-Gyro/Pitbike/A1/Hochkant")
             try? fmx.removeItem(at: gd.deletingLastPathComponent().deletingLastPathComponent())

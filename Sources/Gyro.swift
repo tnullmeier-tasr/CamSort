@@ -149,6 +149,40 @@ final class GyroRunner: ObservableObject {
         return s.isEmpty ? "_stabilized" : s
     }
 
+    // MARK: Drohnen → Tiefpassfilter
+
+    /// Drohnen-Schlüsselwörter (ganze Wörter im Pfad, nur zusammen mit DJI-Bewegungsdaten bzw. „DJI“ im Pfad)
+    nonisolated static let droneWords: Set<String> = ["avata", "avata2", "fpv", "mini", "air", "mavic", "neo", "phantom", "inspire", "spark", "flip", "m3p", "m3e", "m3t", "m30", "m30t", "lito"]
+    /// Ordnernamen, die allein schon „Drohne“ bedeuten
+    nonisolated static let droneFolderWords: Set<String> = ["drohne", "drohnen", "drone", "drones", "fpv", "avata", "avata2"]
+    /// DJI-Bodenkameras: nie als Drohne
+    nonisolated static let groundWords: Set<String> = ["osmo", "action", "pocket", "ronin", "mic"]
+
+    /// Ist der Clip von einer Drohne? Kameraordnername (gelernte Kamera = Ordnername), Dateiname (z. B. DJI_…_D_M3P) und DJI-Bewegungsdaten.
+    nonisolated static func isDrone(_ url: URL, source: String?) -> Bool {
+        let comps = url.deletingLastPathComponent().pathComponents.suffix(6) + [url.deletingPathExtension().lastPathComponent]
+        let tokens = Set(comps.flatMap { c in
+            c.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        })
+        if !tokens.isDisjoint(with: groundWords) { return false }
+        if comps.contains(where: { droneFolderWords.contains(FolderNames.fold($0)) }) { return true }
+        let dji = source == "DJI" || tokens.contains("dji")
+        return dji && !tokens.isDisjoint(with: droneWords)
+    }
+
+    /// Tiefpass (Gyroflow: gyro_source.lpf in Hz, 0 = aus – core/lib.rs import_gyroflow_data/export_gyroflow_data,
+    /// UI src/ui/menu/MotionData.qml „Low pass filter“, Standard 50 Hz) in die Inline-Preset-JSON setzen.
+    /// Hat das Preset schon einen Wert > 0, bleibt er. Kein JSON (Pfad) → unverändert.
+    nonisolated static func withLowPass(_ presetJSON: String, hz: Double) -> String {
+        guard hz > 0, let data = presetJSON.replacingOccurrences(of: "\\u0027", with: "'").data(using: .utf8),
+              var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return presetJSON }
+        var gs = obj["gyro_source"] as? [String: Any] ?? [:]
+        if let cur = (gs["lpf"] as? NSNumber)?.doubleValue, cur > 0 { return presetJSON }
+        gs["lpf"] = hz
+        obj["gyro_source"] = gs
+        return jsonString(obj) ?? presetJSON
+    }
+
     /// Hat der Clip Bewegungsdaten, die Gyroflow lesen kann? Erkennung wie telemetry-parser (Gyroflow):
     /// Sony = XML mit manufacturer="Sony" (Begleitdatei oder eingebettet), DJI = "djmd" + "DJI meta",
     /// GoPro = "GPMFDEVC" bzw. "GoPro MET", Insta360 = Magic am Dateiende. Unsicher → nil (nicht anbieten).
@@ -638,6 +672,12 @@ final class GyroRunner: ObservableObject {
                 presetArg = full
                 note = "Preset: " + (originalPreset as NSString).lastPathComponent + " (komplett, nur Ausgabegröße \(w)×\(h))"
             }
+        }
+        // Drohnen-Clip: Tiefpassfilter an (gilt für reduziertes, komplettes und Fallback-Preset)
+        if store.gyroDroneLPF && Self.isDrone(clip, source: Self.gyroSource(clip)) {
+            let prevArg = presetArg
+            presetArg = Self.withLowPass(presetArg, hz: store.gyroDroneLPFHz)
+            if presetArg != prevArg { note += " + Tiefpass \(Int(store.gyroDroneLPFHz)) Hz (Drohne)" }
         }
         // -f (overwrite) betrifft nur Gyroflows Ausgabedatei (cli.rs: Fehler „file_exists:“ des Render-Jobs). Vorher ist geprüft,
         // dass es keine Datei „Stamm+Suffix.*“ gibt – -f kann also nur eine Teil-Ausgabe dieses Laufs (Fallback-Versuch) ersetzen.
