@@ -13,6 +13,8 @@ enum FolderNames {
     static var sceneWord = "Szene"
     static var sceneShowTime = true
     static var sceneShowCams = true
+    /// Videos-Sammelordner anlegen (Dreh/Videos/…). Aus: Ebenen liegen direkt im Dreh-Ordner (Dreh/Kamera/Quer).
+    static var useVideosFolder = true
 
     static var videoAliases: Set<String> { ["Videos", videos] }
     static func isVideos(_ s: String) -> Bool { videoAliases.contains(s) }
@@ -35,8 +37,19 @@ enum FolderNames {
         return h > w ? portrait : landscape
     }
     /// Liegt der Clip in einem sortierten Bereich? (unter „Videos“ oder – Modus „Meine Kameraordner“ – unter Hochkant/Quer)
+    /// Auch ohne „Videos“-Ordner: Ausrichtungs-/FPS-Ordner (auch als Teil eines zusammengesetzten Namens „Sony · Quer“)
     static func isSortedVideoPath(_ comps: [String]) -> Bool {
-        comps.contains(where: isVideos) || comps.dropLast().contains(where: isOrientation) || comps.dropLast().contains(where: isFpsFolder)
+        comps.contains(where: isVideos) || comps.dropLast().contains(where: hasOrientationPart) || comps.dropLast().contains(where: hasFpsPart)
+    }
+    /// Ausrichtung als ganzer Name oder als Teil eines zusammengesetzten Namens („Sony · Quer“)
+    static func hasOrientationPart(_ s: String) -> Bool {
+        isOrientation(s) || (s.contains(separator) && s.components(separatedBy: separator).contains(where: isOrientation))
+    }
+    /// Szenen-Ordner, den CamSort anlegt („Szene 03“, „Szene 03 · 14.20 · Sony“)
+    static func isSceneFolder(_ s: String) -> Bool {
+        let first = s.components(separatedBy: separator).first ?? s
+        let pat = "^" + NSRegularExpression.escapedPattern(for: fold(sceneWord)) + #" \d{2,3}$"#
+        return fold(first).range(of: pat, options: .regularExpression) != nil
     }
 
     // MARK: Bildrate (FPS)
@@ -87,6 +100,7 @@ enum FolderNames {
         sceneWord = s("fnSceneWord", "Szene")
         sceneShowTime = d.object(forKey: "fnSceneTime") as? Bool ?? true
         sceneShowCams = d.object(forKey: "fnSceneCams") as? Bool ?? true
+        useVideosFolder = d.object(forKey: "useVideosFolder") as? Bool ?? true
         fpsTemplate = s("fnFps", "{n} fps")
         if !fpsTemplate.contains("{n}") { fpsTemplate = "{n} fps" }
     }

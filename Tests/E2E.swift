@@ -2,6 +2,7 @@
 import SwiftUI
 import AVFoundation
 import AppKit
+import CryptoKit
 
 /// End-to-End-Test: sortiert einen echten Testordner, prüft das Ergebnis und rendert alle Ansichten als Bilder.
 @main
@@ -677,6 +678,82 @@ struct E2E {
             await runP()
             check(asked == 1 && find("C1530.MP4")?.hasPrefix("Auftrag B/") == true, "Neuer Clip 15:30 → Projekt B ohne Frage (\(find("C1530.MP4") ?? "-"))")
             store.projectMode = "never"; store.compactLayout = false
+        }
+
+        // 6g) Videos-Sammelordner abschaltbar, eigene Kameraordner (E1 neben A1) sind kein Dreh, Neu ordnen bei geänderten Einstellungen
+        do {
+            let fmx = FileManager.default
+            let a1q = root.appendingPathComponent("Videos/Sony Alpha 1/Quer/Original/C0001.MP4")
+            let zvh = root.appendingPathComponent("Videos/Sony ZV-E1/Hochkant/C0002.MP4")
+            let pit = root.deletingLastPathComponent().appendingPathComponent("CamSort-Pitbike")
+            try? fmx.removeItem(at: pit)
+            let e1 = pit.appendingPathComponent("E1"), card = pit.appendingPathComponent("A1/PRIVATE/M4ROOT/CLIP")
+            for d in [e1, card] { try? fmx.createDirectory(at: d, withIntermediateDirectories: true) }
+            try? fmx.copyItem(at: zvh, to: e1.appendingPathComponent("C0301.MP4"))           // E1: Clips lose im Kameraordner
+            try? "<NonRealTimeMeta><Device manufacturer=\"Sony\" modelName=\"ZV-E1\"/></NonRealTimeMeta>".write(to: e1.appendingPathComponent("C0301M01.XML"), atomically: true, encoding: .utf8)
+            try? fmx.copyItem(at: a1q, to: card.appendingPathComponent("C0401.MP4"))          // A1: Kartenstruktur + Kartendatei
+            try? "x".write(to: pit.appendingPathComponent("A1/SONYCARD.IND"), atomically: true, encoding: .utf8)
+            store.ownCameraFolders = false; store.compactLayout = true; store.groupByScene = false; store.droneBySpeed = false
+            store.levels = ["camera", "orientation"]; store.nestLevels = true
+            store.dateMode = "off"; store.renameMode = "off"; store.fpsMode = "off"; store.projectMode = "never"
+            UserDefaults.standard.removeObject(forKey: "ownCamSuggest")
+            UserDefaults.standard.set(false, forKey: "useVideosFolder")
+            var ownAsked = 0, reorderAsked = 0
+            func runV(reorder: String = "keep") async {
+                sorter.reset(); sorter.addFolders([pit]); sorter.start()
+                let t0 = Date()
+                while sorter.phase != .done && sorter.phase != .cancelled && Date().timeIntervalSince(t0) < 120 {
+                    if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion.isEmpty ? "Kamera" : r.suggestion, remember: false) }
+                    if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                    if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                    if let q = sorter.pendingQuestion {
+                        if q.options.contains(where: { $0.id == "reorder" }) {
+                            reorderAsked += 1
+                            if reorderAsked == 1 { render(QuestionSheet(request: q), "24-rueckfrage-neu-ordnen", w: 520, h: 420, sheet: true) }
+                            sorter.answerQuestion(reorder, remember: false)
+                        } else if q.title.contains("Kameraordner") {
+                            ownAsked += 1; sorter.answerQuestion("no", remember: false)
+                        } else { sorter.answerQuestion("off", remember: false) }
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            func ex(_ p: String) -> Bool { fmx.fileExists(atPath: pit.appendingPathComponent(p).path) }
+            func tree() -> [String] { ((try? fmx.subpathsOfDirectory(atPath: pit.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted() }
+            await runV()
+            let t1 = tree()
+            report.append("ℹ️ Ohne Videos-Ordner: " + t1.joined(separator: " | "))
+            check(ownAsked == 1, "Eigene Kameraordner (A1, E1) erkannt → Vorschlag „Meine Kameraordner“")
+            check(ex("Sony ZV-E1/Hochkant/C0301.MP4") && ex("Sony Alpha 1/Quer/C0401.MP4"), "Videos-Sammelordner aus → Pitbike/<Kamera>/Hochkant|Quer")
+            check(!ex("Videos") && !ex("E1/Videos") && !ex("A1/Videos"), "Kein Videos-Ordner, E1 neben A1 wird nicht zu E1/Videos")
+            check(ex(Sorter.layoutMarker), "Layout-Datei .camsort-layout geschrieben")
+            check(FolderNames.isSortedVideoPath(pit.appendingPathComponent("Sony ZV-E1/Hochkant/C0301.MP4").pathComponents), "Gyroflow/Selects/Tagger erkennen sortierte Clips ohne Videos-Ordner")
+            await runV()
+            check(tree() == t1 && ownAsked == 1 && reorderAsked == 0, "Ohne Videos-Ordner: zweiter Lauf ohne Frage, nichts verschoben")
+
+            // Einstellung umstellen → erneut einwerfen → Frage → neu ordnen (nur verschieben, Dateien bitgleich)
+            func sums() -> [String: String] {
+                var out: [String: String] = [:]
+                for p in tree() where p.hasSuffix(".MP4") {
+                    if let d = try? Data(contentsOf: pit.appendingPathComponent(p)) {
+                        out[(p as NSString).lastPathComponent] = "\(d.count)-" + SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined()
+                    }
+                }
+                return out
+            }
+            let before = sums()
+            UserDefaults.standard.set(true, forKey: "useVideosFolder")
+            await runV(reorder: "reorder")
+            let t2 = tree()
+            report.append("ℹ️ Neu geordnet: " + t2.joined(separator: " | "))
+            check(reorderAsked == 1, "Geänderte Einstellungen → Frage „neu ordnen?“")
+            check(ex("Videos/Sony ZV-E1/Hochkant/C0301.MP4") && ex("Videos/Sony Alpha 1/Quer/C0401.MP4"), "Neu ordnen → Pitbike/Videos/<Kamera>/…")
+            check(!ex("Sony ZV-E1") && !ex("Sony Alpha 1"), "Leer gewordene alte Ebenen-Ordner entfernt")
+            check(before == sums() && before.count == 2, "Neu ordnen: Dateien bitgleich (Größe + SHA-256)")
+            await runV(reorder: "reorder")
+            check(reorderAsked == 1 && tree() == t2, "Nach dem Neu-Ordnen: nächster Lauf ohne Frage, nichts verschoben")
+            UserDefaults.standard.removeObject(forKey: "useVideosFolder")
+            store.compactLayout = false
         }
 
         // 7) Weitere Ansichten

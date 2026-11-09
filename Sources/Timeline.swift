@@ -77,6 +77,11 @@ final class TimelineModel: ObservableObject {
             return ["Hochkant", "Quer", "Quadratisch", FolderNames.square, "Stand", "Fahrt", "Dazwischen", "Ohne GPS"].contains(n) || FolderNames.isFpsFolder(n) ? "Kamera" : n
         }
         if c.contains(where: FolderNames.isVideos) { return "Kamera" }
+        // ohne Videos-Sammelordner, zusammengesetzter Ordnername: <Dreh>/Sony · Quer/Clip → erster Teil
+        if c.count >= 2, !FolderNames.isOrientation(c[c.count - 2]), FolderNames.hasOrientationPart(c[c.count - 2]) {
+            let first = c[c.count - 2].components(separatedBy: FolderNames.separator).first ?? ""
+            return first.isEmpty || FolderNames.isSceneFolder(first) ? "Kamera" : first
+        }
         // Modus „Meine Kameraordner“: <Kamera>/[Zusatzebenen]/Hochkant|Quer/Clip
         if let i = c.dropLast().lastIndex(where: FolderNames.isOrientation), i > 0 {
             let d = UserDefaults.standard

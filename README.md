@@ -34,6 +34,23 @@
 
 Alle Einstellungen und alles Gelernte bleiben nach einem Neustart erhalten.
 
+**Einstellungen in jeder Phase:** Zahnrad oben rechts im Kopf (⌘,) – auch beim Sortieren, im Fertig-Bildschirm, nach Gyroflow und nach Abbruch. Läuft gerade ein Lauf, zeigt das Fenster „Änderungen gelten ab dem nächsten Lauf“: Ein Lauf arbeitet mit einer Momentaufnahme der Einstellungen vom Start.
+
+## Videos-Sammelordner (abschaltbar)
+*Einstellungen › Sortieren › Videos-Sammelordner anlegen* (Standard: an = bisheriges Verhalten `Dreh/Videos/…`).
+- **Aus:** Die Ebenen liegen direkt im Dreh: `Pitbike/Sony ZV-E1/Hochkant`, mit Objektiv `Pitbike/Sony ZV-E1/FE 24-70/Quer`. Fotos, Begleitdateien und Extras bleiben in ihren eigenen Ordnern.
+- Erneutes Einlesen erkennt die Ebenen-Ordner an Ausrichtung, Bildrate bzw. Szene (auch zusammengesetzt wie `Sony · Quer`) – der zweite Lauf verschiebt nichts. Ist keine dieser Ebenen aktiv, legt CamSort den Videos-Ordner trotzdem an (sonst wäre Sortiertes nicht erkennbar).
+- Gyroflow, Auswahl (Selects), Verschlagworten und Timeline finden die Clips auch ohne Videos-Ordner.
+- Im Modus „Meine Kameraordner“ entsteht nie ein Videos-Ordner (`E1/Hochkant`).
+- **Kameraordner sind kein Dreh:** Liegen im eingeworfenen Ordner eigene Kameraordner nebeneinander (`Pitbike/E1`, `A1`, `Avata` mit losen Clips oder Kartenstruktur), ist der Dreh `Pitbike` – nicht mehr `E1/Videos`. Lose Kartendateien (z. B. `SONYCARD.IND`) neben `PRIVATE`/`DCIM` stören die Erkennung nicht mehr. Ist „Meine Kameraordner“ aus, schlägt CamSort einmal vor, den Modus zu verwenden (`E1/Hochkant`, `E1/Quer`, mit *Antwort merken*).
+
+## Neu ordnen bei geänderten Einstellungen
+Jeder kompakt sortierte Dreh bekommt eine unsichtbare Datei `.camsort-layout` (welche Einstellungen die Struktur bestimmt haben: Videos-Ordner, Ebenen, Reihenfolge, verschachtelt, Trennzeichen). Wird ein sortierter Ordner mit anderen Einstellungen erneut eingeworfen, fragt CamSort: „Dieser Ordner wurde mit anderen Einstellungen sortiert. Jetzt neu ordnen?“ – mit 1–2 Beispielpfaden Alt → Neu.
+- **Neu ordnen:** alle einsortierten Clips (inkl. `Stabilisiert`/`Original`, Gyroflow-Projekte wandern mit) werden in die neue Struktur verschoben – nur verschieben, nie überschreiben (Duplikat-Rückfrage wie immer). Die Kamera kommt aus dem bisherigen Ordner, es wird nicht neu gefragt. Leer gewordene Ebenen-Ordner werden entfernt. Final-Cut-Mediatheken im Dreh werden danach zum Neu-Verknüpfen angezeigt.
+- **So lassen:** bisherige Struktur bleibt, nur neue Dateien werden einsortiert; für genau diese Einstellungen wird nicht erneut gefragt.
+- Drehs ohne `.camsort-layout` (ältere Läufe): CamSort leitet die Struktur aus den Ordnernamen ab; passt sie schon, wird nur die Datei geschrieben, sonst kommt die Frage „Mit aktuellen Einstellungen neu ordnen?“.
+- Nicht automatisch umgebaut wird zwischen kompaktem Modus und „Meine Kameraordner“ in Richtung Kameraordner.
+
 ## Modus „Meine Kameraordner“
 Für alle, die beim Heimkommen selbst einen Ordner pro Kamera anlegen (z. B. `A1`, `Mini-Drohne`, `Avata`, `ETC`) und die Karten hineinkopieren. Einschalten: *Einstellungen › Sortieren › Meine Kameraordner* oder direkt per Schalter im Startbildschirm. Standard: aus.
 

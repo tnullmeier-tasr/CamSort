@@ -86,6 +86,37 @@ struct PreRunQuestion {
 
 enum Phase { case idle, scanning, sorting, done, cancelled }
 
+/// Momentaufnahme der Sortier-Einstellungen zu Beginn eines Laufs. Das Einstellungs-Fenster ist in jeder Phase
+/// erreichbar; was dort während eines Laufs geändert wird, wirkt erst beim nächsten Lauf (keine halb-alte/halb-neue Struktur).
+struct RunSettings {
+    var compactLayout: Bool
+    var ownCameraFolders: Bool
+    var includeSubfolders: Bool
+    var nestLevels: Bool
+    var autoGyro: Bool
+    var levels: [String]
+    var sortByLens: Bool
+    var droneBySpeed: Bool
+    var standMin: Double
+    var standMax: Double
+    var moveMin: Double
+    var moveMax: Double
+    var lengthThreshold: Double
+    var lengthShort: String
+    var lengthLong: String
+    var sceneGapMinutes: Double
+    var gyroSuffixList: [String]
+
+    @MainActor init(_ s: LearnedStore) {
+        compactLayout = s.compactLayout; ownCameraFolders = s.ownCameraFolders; includeSubfolders = s.includeSubfolders
+        nestLevels = s.nestLevels; autoGyro = s.autoGyro; levels = s.levels
+        sortByLens = s.sortByLens; droneBySpeed = s.droneBySpeed
+        standMin = s.standMin; standMax = s.standMax; moveMin = s.moveMin; moveMax = s.moveMax
+        lengthThreshold = s.lengthThreshold; lengthShort = s.lengthShort; lengthLong = s.lengthLong
+        sceneGapMinutes = s.sceneGapMinutes; gyroSuffixList = s.gyroSuffixList
+    }
+}
+
 private struct Job {
     let dir: URL      // Ordner, in dem die Datei liegt – dort wird einsortiert
     let url: URL
@@ -141,6 +172,8 @@ final class Sorter: ObservableObject {
     var lastFieldAnswers: [String: String] = [:]
 
     let store: LearnedStore
+    /// Einstellungen, eingefroren beim Start eines Laufs – Änderungen im Einstellungs-Fenster gelten ab dem nächsten Lauf.
+    private(set) var cfg: RunSettings
 
     nonisolated static let videoExt: Set<String> = ["mp4", "mov", "m4v", "insv", "mts", "m2ts", "avi", "mkv", "3gp", "mxf"]
     nonisolated static let photoExt: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "dng", "arw", "hif", "tif", "tiff", "raw",
@@ -156,9 +189,13 @@ final class Sorter: ObservableObject {
     @Published var skipAsking = false   // „Lernen überspringen“ für diesen Durchlauf
     private var askedCameras: [String: String] = [:]
     private var task: Task<Void, Never>?
+    private var videosRootCache: [String: URL] = [:]
     private let fm = FileManager.default
 
-    init(store: LearnedStore) { self.store = store }
+    init(store: LearnedStore) { self.store = store; self.cfg = RunSettings(store) }
+
+    /// Läuft gerade ein Lauf (Einlesen, Sortieren, Gyroflow-Trennung)?
+    var isRunning: Bool { phase == .scanning || phase == .sorting }
 
     var progress: Double { total == 0 ? 0 : Double(processed) / Double(total) }
     var movedTotal: Int { counts.values.reduce(0, +) + sideCounts.values.reduce(0, +) }
@@ -172,6 +209,8 @@ final class Sorter: ObservableObject {
 
     /// true, solange das Finder-Fenster zur Ordnerwahl offen ist (Startbildschirm pausiert dann seine Animation)
     @Published var pickingFolder = false
+    /// Einstellungs-Sheet (ein gemeinsames für alle Phasen, im Header)
+    @Published var showSettings = false
 
     /// Ordnerwahl ohne runModal: Das Finder-Fenster läuft seit macOS 15+ in einem eigenen Prozess und
     /// bleibt beim Laden hängen, wenn die App währenddessen dauerhaft animiert. Daher begin { } (nicht blockierend),
@@ -210,45 +249,84 @@ final class Sorter: ObservableObject {
 
     private func clearResults() {
         counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; speeds = [:]; skipped = 0; ignored = 0
-        problems = []; hints = []; movedVideos = 0; folderStats = []; gyroOffer = []; gyroOfferByCamera = [:]; drehStarts = [:]; projectSummaries = []; projectRoots = []; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
+        problems = []; hints = []; movedVideos = 0; videosRootCache = [:]; folderStats = []; gyroOffer = []; gyroOfferByCamera = [:]; drehStarts = [:]; projectSummaries = []; projectRoots = []; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
     }
 
     func start() {
-        FolderNames.load()
         guard !folders.isEmpty else { return }
+        FolderNames.load()
+        cfg = RunSettings(store)
+        Self.selectedBases = Set(folders.map { $0.standardizedFileURL.path })
         clearResults(); processed = 0
         phase = .scanning
         task = Task {
+            guard await suggestOwnCameraFolders() else { phase = .cancelled; stepLabel = ""; return }
             stepLabel = "Projekte prüfen …"
             guard await splitProjects() else { phase = .cancelled; stepLabel = ""; return }
-            stepLabel = store.ownCameraFolders ? "Meine Kameraordner: Hochkant / Quer"
+            stepLabel = cfg.ownCameraFolders ? "Meine Kameraordner: Hochkant / Quer"
                       : alreadySorted ? "Ordner schon sortiert – suche neue Dateien" : "Schritt 1: Sortieren"
-            if store.ownCameraFolders { await runOwnCameraFolders() } else { await run() }
+            if cfg.ownCameraFolders { await runOwnCameraFolders() } else { await run() }
             guard phase != .cancelled, !Task.isCancelled else { return }
             await renameDrehFolders()
             guard phase != .cancelled, !Task.isCancelled else { return }
-            if store.autoGyro { await runGyro(auto: true) }
+            if cfg.autoGyro { await runGyro(auto: true) }
             stepLabel = ""
             phase = Task.isCancelled ? .cancelled : .done
         }
     }
 
+    /// Eigene Kameraordner (z. B. A1, E1, Avata) im eingeworfenen Ordner erkannt, Modus „Meine Kameraordner“ aber aus →
+    /// einmal vorschlagen. false = abgebrochen.
+    private func suggestOwnCameraFolders() async -> Bool {
+        guard !cfg.ownCameraFolders, cfg.compactLayout, UserDefaults.standard.string(forKey: "ownCamSuggest") != "no" else { return true }
+        var names: [String] = []
+        for base in folders where !Self.looksSorted(base) {
+            let kids = ((try? fm.contentsOfDirectory(atPath: base.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
+            if kids.contains(where: { fm.fileExists(atPath: base.appendingPathComponent($0).appendingPathComponent(Self.projectMarker).path) }) { continue }
+            let cams = kids.filter { Self.isCameraLikeFolder(base.appendingPathComponent($0)) }
+            if cams.count >= 2 { names += cams }
+        }
+        guard let first = names.first else { return true }
+        let shown = names.count > 4 ? names.prefix(3).joined(separator: ", ") + " …" : names.joined(separator: ", ")
+        let normal = wantsVideosFolder ? "Dreh/\(FolderNames.videos)/Kamera/…" : "Dreh/Kamera/…"
+        let q = PreRunQuestion(
+            key: "owncams", title: "Eigene Kameraordner erkannt",
+            message: "Sieht aus wie eigene Kameraordner (\(shown)). Modus „Meine Kameraordner“ verwenden?",
+            icon: "camera.on.rectangle",
+            options: [QuestionOption(id: "yes", label: "Ja, Meine Kameraordner", detail: "\(first)/Hochkant, \(first)/Quer"),
+                      QuestionOption(id: "no", label: "Nein, normal sortieren", detail: normal)],
+            preset: nil,
+            remember: { [weak self] a in
+                if a == "yes" { self?.store.ownCameraFolders = true } else { UserDefaults.standard.set("no", forKey: "ownCamSuggest") }
+            })
+        guard let a = await resolve([q]) else { return false }
+        if a["owncams"] == "yes" { cfg.ownCameraFolders = true }
+        return true
+    }
+
     /// Schritt 2: nach Gyroflow stabilisierte und unstabilisierte Clips trennen.
     @Published var stepLabel = ""
     @Published var gyroMoved = 0
-    private var alreadySorted: Bool {
-        folders.contains { fm.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }
+    private var alreadySorted: Bool { folders.contains(where: Self.looksSorted) }
+
+    /// Wurde dieser Ordner schon von CamSort sortiert? (Videos-Ordner oder – ohne Videos-Sammelordner – Ebenen-Ordner direkt darin)
+    static func looksSorted(_ base: URL) -> Bool {
+        let fm = FileManager.default
+        if FolderNames.videoAliases.contains(where: { fm.fileExists(atPath: base.appendingPathComponent($0).path) }) { return true }
+        let kids = ((try? fm.contentsOfDirectory(atPath: base.path)) ?? []).filter { !$0.hasPrefix(".") }
+        return kids.contains { isSortedTree(base.appendingPathComponent($0)) }
     }
 
     func startGyro() {
         guard !folders.isEmpty else { return }
+        cfg = RunSettings(store)
         clearResults(); processed = 0
         phase = .scanning
         task = Task { stepLabel = "Gyroflow-Dateien trennen"; await runGyro(auto: false); stepLabel = ""; phase = Task.isCancelled ? .cancelled : .done }
     }
 
     private func runGyro(auto: Bool) async {
-        let suffixes = store.gyroSuffixList
+        let suffixes = cfg.gyroSuffixList
         func isStabilized(_ u: URL) -> Bool {
             let stem = u.deletingPathExtension().lastPathComponent.lowercased()
             return suffixes.contains { stem.contains($0) }
@@ -434,17 +512,17 @@ final class Sorter: ObservableObject {
                     if Self.projectExt.contains(ext) { out.append((u.deletingLastPathComponent(), u, ext)) }
                     return false
                 }
-                if store.compactLayout && FolderNames.isVideos(u.lastPathComponent) { return true }
-                if store.compactLayout && u.pathComponents.contains(where: FolderNames.isVideos) {
-                    return !["Stabilisiert", "Original", "Gyroflow-Projekte"].contains(u.lastPathComponent)
-                }
+                // Schon Einsortiertes (unter „Videos“) wird nicht neu eingelesen – „Neu ordnen“ holt es bei Bedarf gezielt (layoutCompact)
+                if cfg.compactLayout && FolderNames.isVideos(u.lastPathComponent) { return false }
+                // ohne Videos-Sammelordner sortierte Ebenen (Dreh/Kamera/Quer …) nicht erneut einlesen → zweiter Lauf verschiebt nichts
+                if cfg.compactLayout && Self.isSortedTree(u) { return false }
                 return !outNames.contains(u.lastPathComponent)
             }
             if v?.isRegularFile == true { out.append((u.deletingLastPathComponent(), u, ext)) }
             return false
         }
 
-        if store.includeSubfolders {
+        if cfg.includeSubfolders {
             guard let en = fm.enumerator(at: base, includingPropertiesForKeys: keys,
                                          options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return nil }
             while let u = en.nextObject() as? URL {
@@ -494,7 +572,7 @@ final class Sorter: ObservableObject {
             }
         }
 
-        if store.compactLayout {
+        if cfg.compactLayout {
             total = videos.count + others.count
             phase = .sorting
             guard await layoutCompact(videos, siblings: siblings) else { phase = .cancelled; return }
@@ -541,7 +619,7 @@ final class Sorter: ObservableObject {
                     processed += 1; continue
                 }
                 var target = job.dir.appendingPathComponent("Videos").appendingPathComponent(cam)
-                if store.sortByLens {
+                if cfg.sortByLens {
                     if let lens = await lensName(for: job.url, asset: asset, siblings: siblings[job.dir] ?? []) {
                         target = target.appendingPathComponent(lens)
                         lenses[lens, default: 0] += 1
@@ -550,15 +628,15 @@ final class Sorter: ObservableObject {
                         lenses["Objektiv unbekannt", default: 0] += 1
                     }
                 }
-                if store.droneBySpeed {
+                if cfg.droneBySpeed {
                     let stem = job.url.deletingPathExtension().lastPathComponent
                     let srt = [stem + ".SRT", stem + ".srt"].first { (siblings[job.dir] ?? []).contains($0) }
                     if let srt {
                         switch SRTSpeed.analyze(job.dir.appendingPathComponent(srt)) {
                         case .speed(let kmh):
                             let folder: String
-                            if kmh >= store.standMin && kmh <= store.standMax { folder = "Stand" }
-                            else if kmh >= store.moveMin && kmh <= store.moveMax { folder = "Fahrt" }
+                            if kmh >= cfg.standMin && kmh <= cfg.standMax { folder = "Stand" }
+                            else if kmh >= cfg.moveMin && kmh <= cfg.moveMax { folder = "Fahrt" }
                             else { folder = "Dazwischen" }
                             target = target.appendingPathComponent(folder)
                             speeds[folder, default: 0] += 1
@@ -616,15 +694,110 @@ final class Sorter: ObservableObject {
         if let i = c.firstIndex(where: FolderNames.isVideos) { root = URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i]))) }
         else if let i = c.firstIndex(where: { cardMarkers.contains($0.uppercased()) }) {
             root = URL(fileURLWithPath: NSString.path(withComponents: Array(c[..<i])))
-        } else { return dir }
-        // Ordner, der nur eine Kartenkopie enthält (z. B. „Karte A/PRIVATE“) → der Dreh ist eine Ebene höher
+        } else {
+            // Clips lose in einem Kameraordner (z. B. „Pitbike/E1/C0001.MP4“ neben „A1“, „Avata“) → Dreh = Elternordner
+            return cameraParent(dir) ?? dir
+        }
+        // Ordner, der nur eine Kartenkopie enthält (z. B. „Karte A/PRIVATE“) → der Dreh ist eine Ebene höher.
+        // Lose Nicht-Mediendateien der Karte (z. B. SONYCARD.IND, Thumbs.db) zählen nicht als eigener Inhalt.
         let inside = ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []).filter { !$0.hasPrefix(".") }
-        let cardish = cardMarkers.union(["MISC", "AVF_INFO", "THMBNL", "SUB", "GENERAL"])
         let hasCard = inside.contains { cardish.contains($0.uppercased()) }
-        let onlyCardOrOutput = inside.allSatisfy { cardish.contains($0.uppercased()) || fixedOutput.contains($0) }
+        let onlyCardOrOutput = inside.allSatisfy { n in
+            if cardish.contains(n.uppercased()) || fixedOutput.contains(n) { return true }
+            let ext = (n as NSString).pathExtension.lowercased()
+            var isDir: ObjCBool = false
+            _ = FileManager.default.fileExists(atPath: root.appendingPathComponent(n).path, isDirectory: &isDir)
+            return !isDir.boolValue && !videoExt.contains(ext) && !photoExt.contains(ext)
+        }
         let isProject = FileManager.default.fileExists(atPath: root.appendingPathComponent(projectMarker).path)
         if hasCard && onlyCardOrOutput && !isProject { root = root.deletingLastPathComponent() }
+        else if !isProject, let p = cameraParent(root) { root = p }
         return root
+    }
+
+    /// Die in diesem Lauf gewählten Ordner (Standard-Pfade) – drehRoot steigt nie über sie hinaus.
+    static var selectedBases: Set<String> = []
+
+    /// Ist `dir` ein Kameraordner (wie „E1“ neben „A1“, „Avata“) innerhalb eines gewählten Ordners? Dann ist der Elternordner der Dreh.
+    static func cameraParent(_ dir: URL) -> URL? {
+        let me = dir.standardizedFileURL.path
+        let parent = dir.deletingLastPathComponent()
+        let pp = parent.standardizedFileURL.path
+        guard !selectedBases.contains(me),
+              selectedBases.contains(where: { pp == $0 || pp.hasPrefix($0 + "/") }),
+              !FileManager.default.fileExists(atPath: dir.appendingPathComponent(projectMarker).path),
+              isCameraLikeFolder(dir) else { return nil }
+        let sibs = ((try? FileManager.default.contentsOfDirectory(atPath: parent.path)) ?? [])
+            .filter { !$0.hasPrefix(".") && $0 != dir.lastPathComponent }
+        return sibs.contains(where: { isCameraLikeFolder(parent.appendingPathComponent($0)) }) ? parent : nil
+    }
+
+    /// Sieht aus wie EINE Kamera: Videos (eine Dateinamen-Familie) oder Kartenstruktur direkt darin,
+    /// keine eigenen Unterordner außer Karten-/CamSort-Ordnern, nichts schon Sortiertes.
+    static func isCameraLikeFolder(_ u: URL) -> Bool {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { return false }
+        let name = u.lastPathComponent
+        if fixedOutput.contains(name) || cardish.contains(name.uppercased()) || FolderNames.isVideos(name)
+            || projectExt.contains(u.pathExtension.lowercased()) || isSortedTree(u) { return false }
+        let kids = ((try? fm.contentsOfDirectory(atPath: u.path)) ?? []).filter { !$0.hasPrefix(".") }
+        var media = false
+        var families = Set<String>()
+        for k in kids {
+            let ku = u.appendingPathComponent(k)
+            let ext = ku.pathExtension.lowercased()
+            var d: ObjCBool = false
+            _ = fm.fileExists(atPath: ku.path, isDirectory: &d)
+            if d.boolValue && !projectExt.contains(ext) {
+                if cardish.contains(k.uppercased()) { media = true; continue }
+                if fixedOutput.contains(k) { continue }
+                return false   // eigener Unterordner → eher ein Dreh oder Projekt als eine Kamera
+            }
+            if videoExt.contains(ext) { media = true; families.insert(LearnedStore.prefix(of: k)) }
+        }
+        return media && families.count <= 1
+    }
+
+    /// Von CamSort ohne Videos-Sammelordner angelegter Ebenen-Ordner? (enthält Ausrichtungs-, FPS- oder Szenen-Ordner,
+    /// bzw. heißt selbst so – auch zusammengesetzt wie „Sony · Quer“), keine Kartenstruktur.
+    static func isSortedTree(_ u: URL, depth: Int = 6) -> Bool {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { return false }
+        let name = u.lastPathComponent
+        if cardish.contains(name.uppercased()) || FolderNames.isVideos(name) { return false }
+        if FolderNames.hasOrientationPart(name) || FolderNames.hasFpsPart(name) || FolderNames.isSceneFolder(name) { return true }
+        guard depth > 0 else { return false }
+        let kids = ((try? fm.contentsOfDirectory(atPath: u.path)) ?? []).filter { !$0.hasPrefix(".") }
+        if kids.contains(where: { cardish.contains($0.uppercased()) }) { return false }
+        return kids.contains { isSortedTree(u.appendingPathComponent($0), depth: depth - 1) }
+    }
+
+    /// Wurzel der Video-Ebenen eines Drehs: „Dreh/Videos“ oder – Videos-Sammelordner aus – der Dreh selbst.
+    /// Bestehende Drehs werden nie umgebaut: vorhandener Videos-Ordner bleibt in Gebrauch, ebenso eine vorhandene Struktur ohne.
+    func videosRoot(_ dreh: URL) -> URL {
+        let key = dreh.standardizedFileURL.path
+        if let c = videosRootCache[key] { return c }
+        let withVideos = dreh.appendingPathComponent(FolderNames.videos)
+        let kids = ((try? fm.contentsOfDirectory(atPath: dreh.path)) ?? []).filter { !$0.hasPrefix(".") }
+        let r: URL
+        if kids.contains(where: FolderNames.isVideos) { r = withVideos }
+        else if !FolderNames.useVideosFolder {
+            // ohne Ausrichtung/FPS/Szene wäre beim nächsten Lauf nicht erkennbar, was schon sortiert ist
+            let recognizable = cfg.levels.contains { ["orientation", "fps", "scene"].contains($0) }
+            if recognizable { r = dreh }
+            else {
+                r = withVideos
+                if !hints.contains(where: { $0.hasPrefix("Videos-Sammelordner trotzdem") }) {
+                    hints.append("Videos-Sammelordner trotzdem angelegt: Ohne Ebene Ausrichtung, Bildrate oder Szene wäre beim nächsten Lauf nicht erkennbar, was schon sortiert ist.")
+                }
+            }
+        }
+        else if kids.contains(where: { Self.isSortedTree(dreh.appendingPathComponent($0)) }) { r = dreh }
+        else { r = withVideos }
+        videosRootCache[key] = r
+        return r
     }
 
     private func sidecar(_ stem: String, exts: [String], near dir: URL) -> URL? {
@@ -637,52 +810,313 @@ final class Sorter: ObservableObject {
         return nil
     }
 
+    /// Ein analysierter Clip der kompakten Struktur. old = lag schon einsortiert (für „Neu ordnen“), sub = Stabilisiert/Original
+    private struct CInfo {
+        let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String?; let fps: String; let start: Date; let end: Date
+        var old = false
+        var sub: String? = nil
+    }
+
+    /// Analysiert einen Clip. fixedCam: Kamera schon bekannt (aus dem bisherigen Ordner) – dann keine Rückfrage. nil = abgebrochen.
+    private func analyzeClip(_ job: Job, siblings: Set<String>, fixedCam: String?) async -> CInfo? {
+        let asset = AVURLAsset(url: job.url)
+        let props = await videoProps(of: asset)
+        var sib = siblings
+        let stem = job.url.deletingPathExtension().lastPathComponent
+        if let x = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: job.dir) { sib.insert(x.lastPathComponent) }
+        let cam: String
+        if let f = fixedCam { cam = f }
+        else {
+            guard let c = await camera(for: job.url, asset: asset, siblings: sib) else { return nil }
+            cam = c
+        }
+        var lens: String? = nil
+        if cfg.levels.contains("lens") { lens = await lensName(for: job.url, asset: asset, siblings: sib) ?? "Objektiv unbekannt" }
+        var speed: String? = nil
+        if cfg.levels.contains("speed"), let srt = sidecar(stem, exts: [".SRT", ".srt"], near: job.dir) {
+            switch SRTSpeed.analyze(srt) {
+            case .speed(let kmh):
+                let sp = kmh >= cfg.standMin && kmh <= cfg.standMax ? "Stand"
+                       : kmh >= cfg.moveMin && kmh <= cfg.moveMax ? "Fahrt" : "Dazwischen"
+                speed = sp
+                if fixedCam == nil { hints.append(String(format: "%@: Ø %.1f km/h → %@", job.url.lastPathComponent, kmh, sp)) }
+            case .noGPS: speed = "Ohne GPS"
+            case .unreadable: break
+            }
+        }
+        let (st, en) = await recordingTime(asset, url: job.url)
+        let fps = cam.hasPrefix(LearnedStore.folderPrefix) ? "" : fpsFolder(for: job.url, nominal: props.nominalFps)
+        noteStart(st, for: job.url)
+        return CInfo(job: job, cam: cam, lens: lens, speed: speed, orient: props.orient, fps: fps, start: st, end: en)
+    }
+
+    /// Kamera eines schon einsortierten Clips ohne Rückfrage: gelernte Regel bzw. erkannter Name, sonst „Unbekannt“
+    private func quietCamera(_ url: URL, siblings: Set<String>) async -> String {
+        let det = await detect(url: url, asset: AVURLAsset(url: url), siblings: siblings)
+        return store.camera(for: det.signature) ?? det.name ?? "Unbekannt"
+    }
+
+    // MARK: Layout-Datei & Neu ordnen
+
+    static let layoutMarker = ".camsort-layout"
+
+    /// Welche Einstellungen haben die Struktur eines Drehs bestimmt? (unsichtbare Datei im Dreh-Ordner)
+    struct LayoutSig: Codable, Equatable {
+        var version: Int
+        var useVideos: Bool
+        var videosName: String
+        var levels: [String]          // tatsächlich benutzte Ebenen (inkl. Rückfrage-Ergebnis Datum/FPS)
+        var configLevels: [String]    // Ebenen laut Einstellungen
+        var nest: Bool
+        var separator: String
+        var declined: String?         // „So lassen“ für genau diese Einstellungen → nicht erneut fragen
+        var key: String { "\(useVideos)|\(videosName)|\(configLevels.joined(separator: ","))|\(nest)|\(separator)" }
+    }
+
+    /// Ohne Ausrichtung/FPS/Szene in den Ebenen bleibt der Videos-Ordner (sonst wäre Sortiertes nicht erkennbar)
+    private var levelsRecognizable: Bool { cfg.levels.contains { ["orientation", "fps", "scene"].contains($0) } }
+    private var wantsVideosFolder: Bool { FolderNames.useVideosFolder || !levelsRecognizable }
+    private var currentKey: String {
+        LayoutSig(version: 1, useVideos: wantsVideosFolder, videosName: FolderNames.videos, levels: [], configLevels: cfg.levels,
+                  nest: cfg.nestLevels, separator: FolderNames.separator, declined: nil).key
+    }
+
+    func readLayout(_ dreh: URL) -> LayoutSig? {
+        guard let d = try? Data(contentsOf: dreh.appendingPathComponent(Self.layoutMarker)) else { return nil }
+        return try? JSONDecoder().decode(LayoutSig.self, from: d)
+    }
+
+    private func writeLayout(_ sig: LayoutSig, to dreh: URL) {
+        guard let d = try? JSONEncoder().encode(sig) else { return }
+        try? d.write(to: dreh.appendingPathComponent(Self.layoutMarker), options: .atomic)
+    }
+
+    /// Schon einsortierte Clips eines Drehs (unter Videos bzw. in den Ebenen-Ordnern), inkl. Stabilisiert/Original
+    private func sortedClips(in dreh: URL) -> [(url: URL, dir: URL, sub: String?)] {
+        let kids = ((try? fm.contentsOfDirectory(atPath: dreh.path)) ?? []).filter { !$0.hasPrefix(".") }
+        let roots = kids.filter(FolderNames.isVideos).map { dreh.appendingPathComponent($0) }
+        let tops = roots.isEmpty ? kids.map { dreh.appendingPathComponent($0) }.filter { Self.isSortedTree($0) } : roots
+        var out: [(url: URL, dir: URL, sub: String?)] = []
+        for r in tops {
+            guard let en = fm.enumerator(at: r, includingPropertiesForKeys: [.isRegularFileKey],
+                                         options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+            while let u = en.nextObject() as? URL {
+                guard Self.videoExt.contains(u.pathExtension.lowercased()) else { continue }
+                let parent = u.deletingLastPathComponent()
+                let pn = parent.lastPathComponent
+                if pn == "Gyroflow-Projekte" { continue }
+                if pn == "Stabilisiert" || pn == "Original" { out.append((u, parent.deletingLastPathComponent(), pn)) }
+                else { out.append((u, parent, nil)) }
+            }
+        }
+        return out.sorted { $0.url.path < $1.url.path }
+    }
+
+    /// Kamera aus dem bisherigen Ordnerpfad (nicht neu abfragen). nil = nicht sicher ableitbar.
+    private func oldCamera(_ dir: URL, dreh: URL, sig: LayoutSig?) -> String? {
+        let dc = dir.standardizedFileURL.pathComponents
+        var rc = dreh.standardizedFileURL.pathComponents
+        if dc.count > rc.count, FolderNames.isVideos(dc[rc.count]) { rc.append(dc[rc.count]) }
+        guard dc.count > rc.count, Array(dc.prefix(rc.count)) == rc else { return nil }
+        let rel = Array(dc.dropFirst(rc.count))
+        let sep = sig?.separator ?? FolderNames.separator
+        let nested = sig?.nest ?? (rel.count > 1)
+        let parts = nested ? rel : rel[0].components(separatedBy: sep)
+        if let s = sig {
+            guard let ci = s.levels.firstIndex(of: "camera"), ci < parts.count else { return nil }
+            let optionalBefore = s.levels[..<ci].contains { ["scene", "speed", "orientation", "fps"].contains($0) }
+            return (!optionalBefore || parts.count == s.levels.count) ? parts[ci] : nil
+        }
+        if parts.contains(where: FolderNames.isSceneFolder) { return nil }
+        let levelWords: Set<String> = ["Stand", "Fahrt", "Dazwischen", "Ohne GPS", "Objektiv unbekannt", cfg.lengthShort, cfg.lengthLong]
+        return parts.first { p in
+            !(FolderNames.isOrientation(p) || FolderNames.isFpsFolder(p) || store.isDayFolder(p) || levelWords.contains(p)
+              || p.range(of: #"^\d{2}\.\d{2}$"#, options: .regularExpression) != nil)
+        }
+    }
+
+    /// Gyroflow-Projekte eines verschobenen Clips mitnehmen (gleicher Dateiname vorne), damit Gyroflow sie wiederfindet
+    private func moveGyroCompanions(stem: String, from dir: URL, to target: URL) async {
+        let g = dir.appendingPathComponent("Gyroflow-Projekte")
+        guard let items = try? fm.contentsOfDirectory(atPath: g.path) else { return }
+        for n in items where n.lowercased().hasPrefix(stem.lowercased()) && n.lowercased().hasSuffix(".gyroflow") {
+            _ = await move(g.appendingPathComponent(n), to: target.appendingPathComponent("Gyroflow-Projekte"))
+        }
+    }
+
     /// Analysiert alle Videos je Dreh und legt nur die Ordner an, die sich dort unterscheiden.
     private func layoutCompact(_ videos: [Job], siblings: [URL: Set<String>]) async -> Bool {
-        struct Info { let job: Job; let cam: String; let lens: String?; let speed: String?; let orient: String?; let fps: String; let start: Date; let end: Date }
-        var lv = store.levels
-        var infos: [Info] = []
+        var lv = cfg.levels
+        var infos: [CInfo] = []
         for job in videos {
             if Task.isCancelled { return false }
             currentFile = job.url.lastPathComponent
-            let asset = AVURLAsset(url: job.url)
-            let props = await videoProps(of: asset)
-            let o = props.orient
-            var sib = siblings[job.dir] ?? []
-            let stem = job.url.deletingPathExtension().lastPathComponent
-            if let x = sidecar(stem, exts: ["M01.XML", "M01.xml"], near: job.dir) { sib.insert(x.lastPathComponent) }
-            guard let cam = await camera(for: job.url, asset: asset, siblings: sib) else { return false }
-            var lens: String? = nil
-            if lv.contains("lens") { lens = await lensName(for: job.url, asset: asset, siblings: sib) ?? "Objektiv unbekannt" }
-            var speed: String? = nil
-            if lv.contains("speed"), let srt = sidecar(stem, exts: [".SRT", ".srt"], near: job.dir) {
-                switch SRTSpeed.analyze(srt) {
-                case .speed(let kmh):
-                    speed = kmh >= store.standMin && kmh <= store.standMax ? "Stand"
-                          : kmh >= store.moveMin && kmh <= store.moveMax ? "Fahrt" : "Dazwischen"
-                    hints.append(String(format: "%@: Ø %.1f km/h → %@", job.url.lastPathComponent, kmh, speed!))
-                case .noGPS: speed = "Ohne GPS"
-                case .unreadable: break
+            guard let i = await analyzeClip(job, siblings: siblings[job.dir] ?? [], fixedCam: nil) else { return false }
+            infos.append(i)
+        }
+
+        // Schon sortierte Drehs: mit anderen Einstellungen sortiert? → fragen, ob neu geordnet werden soll
+        var check = Set(infos.map { Self.drehRoot($0.job.dir) })
+        for b in folders {
+            if Self.looksSorted(b) { check.insert(b) }
+            for k in ((try? fm.contentsOfDirectory(atPath: b.path)) ?? []) where !k.hasPrefix(".") {
+                let u = b.appendingPathComponent(k)
+                if fm.fileExists(atPath: u.appendingPathComponent(Self.projectMarker).path) && Self.looksSorted(u) { check.insert(u) }
+            }
+        }
+        let curKey = currentKey
+        var reorder: [URL] = []       // Drehs, die neu geordnet werden
+        var declined: [URL] = []      // Drehs, bei denen Tim „So lassen“ gewählt hat
+        var oldInfos: [CInfo] = []
+        let candidates = check.filter { d in
+            guard Self.looksSorted(d) else { return false }
+            guard let s = readLayout(d) else { return true }
+            return s.key != curKey && s.declined != curKey
+        }.sorted { $0.path < $1.path }
+        var oldTops: [URL] = []       // bisherige Ebenen-Ordner (ohne Videos) – nach dem Neu-Ordnen leere entfernen
+        for d in candidates {
+            let sig = readLayout(d)
+            for k in ((try? fm.contentsOfDirectory(atPath: d.path)) ?? []) where !k.hasPrefix(".") && Self.isSortedTree(d.appendingPathComponent(k)) {
+                oldTops.append(d.appendingPathComponent(k))
+            }
+            for c in sortedClips(in: d) {
+                if Task.isCancelled { return false }
+                currentFile = c.url.lastPathComponent
+                let sib = Set((try? fm.contentsOfDirectory(atPath: c.dir.path)) ?? [])
+                var cam = oldCamera(c.dir, dreh: d, sig: sig)
+                if cam == nil { cam = await quietCamera(c.url, siblings: sib) }
+                let job = Job(dir: c.dir, url: c.url, cat: .video, ext: c.url.pathExtension.lowercased())
+                guard var i = await analyzeClip(job, siblings: sib, fixedCam: cam) else { return false }
+                i.old = true; i.sub = c.sub
+                oldInfos.append(i)
+            }
+        }
+
+        let tf = DateFormatter(); tf.dateFormat = "HH.mm"
+        func pk(_ u: URL) -> String { u.standardizedFileURL.path }
+        /// Dreh eines Clips: schon sortierte Clips gehören zum (tiefsten) geprüften Dreh, neue über drehRoot
+        func drehOf(_ i: CInfo) -> URL {
+            if i.old, let d = candidates.filter({ pk(i.job.url).hasPrefix(pk($0) + "/") }).max(by: { pk($0).count < pk($1).count }) { return d }
+            return Self.drehRoot(i.job.dir)
+        }
+        /// Zielordner je Clip (ohne Stabilisiert/Original-Unterordner) – gleiche Regeln für neue und schon sortierte Clips
+        func plan(_ list: [CInfo], levels lv: [String], root: (URL) -> URL) -> [(info: CInfo, dreh: URL, target: URL)] {
+            var drehURL: [String: URL] = [:]
+            var byDreh: [String: [CInfo]] = [:]
+            for i in list {
+                let d = drehOf(i)
+                if drehURL[pk(d)] == nil { drehURL[pk(d)] = d }
+                byDreh[pk(d), default: []].append(i)
+            }
+            var out: [(info: CInfo, dreh: URL, target: URL)] = []
+            for (dk, items) in byDreh.sorted(by: { $0.key < $1.key }) {
+                guard let dreh = drehURL[dk] else { continue }
+                // Szenen: chronologisch, neue Szene nach einer Pause > Schwelle (über alle Kameras hinweg)
+                var sceneOf: [URL: String] = [:]
+                if lv.contains("scene") {
+                    let cams = items.filter { !$0.cam.hasPrefix(LearnedStore.folderPrefix) }.sorted { $0.start < $1.start }
+                    var scenes: [[CInfo]] = []
+                    var lastEnd = Date.distantPast
+                    for c in cams {
+                        if scenes.isEmpty || c.start.timeIntervalSince(lastEnd) > cfg.sceneGapMinutes * 60 { scenes.append([c]) }
+                        else { scenes[scenes.count - 1].append(c) }
+                        lastEnd = max(lastEnd, c.end)
+                    }
+                    for (n, sc) in scenes.enumerated() {
+                        var camNames: [String] = []
+                        for c in sc where !camNames.contains(c.cam) { camNames.append(c.cam) }
+                        var nameParts = [String(format: "%@ %02d", FolderNames.sceneWord, n + 1)]
+                        if FolderNames.sceneShowTime { nameParts.append(tf.string(from: sc[0].start)) }
+                        if FolderNames.sceneShowCams { nameParts.append(camNames.joined(separator: " + ")) }
+                        let name = nameParts.joined(separator: FolderNames.separator)
+                        for c in sc { sceneOf[c.job.url] = Self.clean(name) }
+                    }
+                }
+                for i in items {
+                    let dur = i.end.timeIntervalSince(i.start)
+                    var parts: [String] = []
+                    for l in lv {
+                        switch l {
+                        case "scene": if let s = sceneOf[i.job.url] { parts.append(s) }
+                        case "camera": parts.append(i.cam)
+                        case "lens": if let x = i.lens { parts.append(x) }
+                        case "length": parts.append(dur < cfg.lengthThreshold ? cfg.lengthShort : cfg.lengthLong)
+                        case "orientation": if let o = i.orient { parts.append(o) }
+                        case "speed": if let s = i.speed { parts.append(s) }
+                        case "date": parts.append(store.dayString(i.start))
+                        case "fps": if !i.fps.isEmpty { parts.append(i.fps) }
+                        default: break
+                        }
+                    }
+                    var target = root(dreh)
+                    if cfg.nestLevels {
+                        for p in parts { target = target.appendingPathComponent(Self.clean(p)) }
+                    } else if !parts.isEmpty {
+                        target = target.appendingPathComponent(Self.clean(parts.joined(separator: FolderNames.separator)))
+                    }
+                    if i.cam.hasPrefix(LearnedStore.folderPrefix) {   // eigener Ordner (Exporte, Bildschirmaufnahmen …)
+                        target = dreh.appendingPathComponent(FolderNames.extras).appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
+                    }
+                    out.append((info: i, dreh: dreh, target: target))
                 }
             }
-            let (st, en) = await recordingTime(asset, url: job.url)
-            let fps = cam.hasPrefix(LearnedStore.folderPrefix) ? "" : fpsFolder(for: job.url, nominal: props.nominalFps)
-            infos.append(Info(job: job, cam: cam, lens: lens, speed: speed, orient: o, fps: fps, start: st, end: en))
-            noteStart(st, for: job.url)
+            return out
         }
+        func finalDir(_ p: (info: CInfo, dreh: URL, target: URL)) -> URL {
+            p.info.sub.map { p.target.appendingPathComponent($0) } ?? p.target
+        }
+        func here(_ i: CInfo) -> String { i.job.url.deletingLastPathComponent().standardizedFileURL.path }
+
+        if !oldInfos.isEmpty {
+            let wantV = wantsVideosFolder
+            let newRoot: (URL) -> URL = { d in wantV ? d.appendingPathComponent(FolderNames.videos) : d }
+            let preview = plan(oldInfos, levels: cfg.levels, root: newRoot)
+            let changed = preview.filter { here($0.info) != finalDir($0).standardizedFileURL.path }
+            var changedDrehs: [URL] = []
+            for c in changed where !changedDrehs.contains(where: { pk($0) == pk(c.dreh) }) { changedDrehs.append(c.dreh) }
+            // Struktur passt schon zu den Einstellungen → nur Layout-Datei schreiben, nicht fragen
+            for d in candidates where !changedDrehs.contains(where: { pk($0) == pk(d) }) {
+                writeLayout(LayoutSig(version: 1, useVideos: videosRoot(d).standardizedFileURL.path != d.standardizedFileURL.path,
+                                      videosName: FolderNames.videos, levels: cfg.levels, configLevels: cfg.levels,
+                                      nest: cfg.nestLevels, separator: FolderNames.separator, declined: nil), to: d)
+            }
+            if !changed.isEmpty {
+                func rel(_ u: URL, _ d: URL) -> String { String(u.standardizedFileURL.path.dropFirst(d.standardizedFileURL.path.count + 1)) }
+                let ex = changed.prefix(2).map { "\(rel($0.info.job.url, $0.dreh))  →  \(rel(finalDir($0).appendingPathComponent($0.info.job.url.lastPathComponent), $0.dreh))" }
+                let names = changedDrehs.map(\.lastPathComponent).sorted().joined(separator: ", ")
+                let known = changedDrehs.contains { readLayout($0) != nil }
+                let q = PreRunQuestion(
+                    key: "reorder",
+                    title: known ? "Dieser Ordner wurde mit anderen Einstellungen sortiert. Jetzt neu ordnen?" : "Mit aktuellen Einstellungen neu ordnen?",
+                    message: "\(names): \(plural(changed.count, "Clip liegt", "Clips liegen")) anders, als die aktuellen Einstellungen es vorsehen. Es wird nur verschoben, nichts verändert oder überschrieben.\n" + ex.joined(separator: "\n"),
+                    icon: "arrow.triangle.branch",
+                    options: [QuestionOption(id: "reorder", label: "Neu ordnen", detail: ex.first ?? ""),
+                              QuestionOption(id: "keep", label: "So lassen, nur neue Dateien einsortieren", detail: "Bisherige Struktur bleibt")],
+                    preset: nil, remember: { _ in })
+                guard let a = await resolve([q]) else { return false }
+                if a["reorder"] == "reorder" {
+                    reorder = changedDrehs
+                    for d in reorder { videosRootCache[pk(d)] = newRoot(d) }
+                    infos += oldInfos.filter { i in reorder.contains { pk($0) == pk(drehOf(i)) } }
+                } else { declined = changedDrehs }
+            }
+        }
+
         // Rückfrage: mehrere Aufnahmetage → auch nach Datum sortieren?
-        // Tagesordner: vorhandene Struktur weiterführen; sonst nur fragen, wenn neue Clips von mehreren Tagen dabei sind
+        // Tagesordner: vorhandene Struktur weiterführen (außer beim Neu-Ordnen); sonst nur fragen, wenn neue Clips von mehreren Tagen dabei sind
         if !lv.contains("date") && !infos.isEmpty {
             var existing: String? = nil
-            for d in Set(infos.map { Self.drehRoot($0.job.dir) }) {
-                if let e = existingDateLayout(d.appendingPathComponent(FolderNames.videos)) { existing = e; break }
+            for d in infos.map(drehOf) where !reorder.contains(where: { pk($0) == pk(d) }) {
+                let vr = videosRoot(d)
+                if let e = existingDateLayout(vr, onlySorted: vr.standardizedFileURL.path == d.standardizedFileURL.path) { existing = e; break }
             }
-            let hasNew = infos.contains { !$0.job.dir.pathComponents.contains(where: FolderNames.isVideos) }
+            let hasNew = infos.contains { !$0.old }
             let day = store.dayString(Date())
+            let vp = wantsVideosFolder ? "\(FolderNames.videos)/" : ""
             var choice: String? = existing
-            if existing == nil && hasNew && projectsNeedDate(infos.map { ($0.job.url, $0.start) }),
+            if existing == nil && (hasNew || !reorder.isEmpty) && projectsNeedDate(infos.map { ($0.job.url, $0.start) }),
                let q = dateQuestion(starts: infos.map(\.start), existing: nil,
-                                    example: ("\(FolderNames.videos)/\(day)/Kamera/…", "\(FolderNames.videos)/Kamera/\(day)/…")) {
+                                    example: ("\(vp)\(day)/Kamera/…", "\(vp)Kamera/\(day)/…")) {
                 guard let a = await resolve([q]) else { return false }
                 choice = a["date"]
             }
@@ -693,95 +1127,98 @@ final class Sorter: ObservableObject {
             default: break
             }
         }
-        // Rückfrage: verschiedene Bildraten → auch nach FPS sortieren? Vorhandene FPS-Ordner → ohne Frage weiterführen.
+        // Rückfrage: verschiedene Bildraten → auch nach FPS sortieren? Vorhandene FPS-Ordner → ohne Frage weiterführen (außer beim Neu-Ordnen).
         if !lv.contains("fps") && !infos.isEmpty {
-            let drehs = Set(infos.map { Self.drehRoot($0.job.dir) })
-            if drehs.contains(where: { hasFpsFolders($0.appendingPathComponent(FolderNames.videos)) }) {
+            let drehs = infos.map(drehOf).filter { d in !reorder.contains(where: { pk($0) == pk(d) }) }
+            if drehs.contains(where: { hasFpsFolders(videosRoot($0)) }) {
                 lv = LearnedStore.insertingFps(into: lv)
             } else {
-                let fresh = infos.filter { !$0.job.dir.pathComponents.contains(where: FolderNames.isVideos) && !$0.fps.isEmpty }
+                let fresh = infos.filter { !$0.fps.isEmpty }
                 let ex = LearnedStore.insertingFps(into: lv).map { LevelBuilder.sample($0, store) }
-                if let q = fpsQuestion(fresh.map(\.fps), example: "\(FolderNames.videos)/" + (store.nestLevels ? ex.joined(separator: "/") : ex.joined(separator: FolderNames.separator)) + "/…") {
+                if let q = fpsQuestion(fresh.map(\.fps), example: (wantsVideosFolder ? "\(FolderNames.videos)/" : "") + (cfg.nestLevels ? ex.joined(separator: "/") : ex.joined(separator: FolderNames.separator)) + "/…") {
                     guard let a = await resolve([q]) else { return false }
                     if a["fps"] == "yes" { lv = LearnedStore.insertingFps(into: lv) }
                 }
             }
         }
-        // je Dreh: welche Merkmale unterscheiden sich?
-        var byDreh: [URL: [Info]] = [:]
-        for i in infos { byDreh[Self.drehRoot(i.job.dir), default: []].append(i) }
-        let tf = DateFormatter(); tf.dateFormat = "HH.mm"
-        for (dreh, list) in byDreh {
-            // Szenen: chronologisch, neue Szene nach einer Pause > Schwelle (über alle Kameras hinweg)
-            var sceneOf: [URL: String] = [:]
-            if lv.contains("scene") {
-                let cams = list.filter { !$0.cam.hasPrefix(LearnedStore.folderPrefix) }.sorted { $0.start < $1.start }
-                var scenes: [[Info]] = []
-                var lastEnd = Date.distantPast
-                for c in cams {
-                    if scenes.isEmpty || c.start.timeIntervalSince(lastEnd) > store.sceneGapMinutes * 60 { scenes.append([c]) }
-                    else { scenes[scenes.count - 1].append(c) }
-                    lastEnd = max(lastEnd, c.end)
-                }
-                for (n, sc) in scenes.enumerated() {
-                    var camNames: [String] = []
-                    for c in sc where !camNames.contains(c.cam) { camNames.append(c.cam) }
-                    var nameParts = [String(format: "%@ %02d", FolderNames.sceneWord, n + 1)]
-                    if FolderNames.sceneShowTime { nameParts.append(tf.string(from: sc[0].start)) }
-                    if FolderNames.sceneShowCams { nameParts.append(camNames.joined(separator: " + ")) }
-                    let name = nameParts.joined(separator: FolderNames.separator)
-                    for c in sc { sceneOf[c.job.url] = Self.clean(name) }
-                }
-            }
-            for i in list {
-                if Task.isCancelled { return false }
-                currentFile = i.job.url.lastPathComponent
-                // Immer eine Ebene, Name enthält alle Merkmale – so erkennt man den Ordner sofort.
-                var tags: [String] = [i.cam]
-                if let l = i.lens { tags.append(l) }
-                if let s = i.speed { tags.append(s) }
-                if let o = i.orient { tags.append(o) }
-                // Ordner-Baukasten: Werte der aktiven Kriterien in der gewählten Reihenfolge
-                let dur = i.end.timeIntervalSince(i.start)
-                var parts: [String] = []
-                for l in lv {
-                    switch l {
-                    case "scene": if let s = sceneOf[i.job.url] { parts.append(s) }
-                    case "camera": parts.append(i.cam)
-                    case "lens": if let x = i.lens { parts.append(x) }
-                    case "length": parts.append(dur < store.lengthThreshold ? store.lengthShort : store.lengthLong)
-                    case "orientation": if let o = i.orient { parts.append(o) }
-                    case "speed": if let s = i.speed { parts.append(s) }
-                    case "date": parts.append(store.dayString(i.start))
-                    case "fps": if !i.fps.isEmpty { parts.append(i.fps) }
-                    default: break
+
+        // Verschieben – nur, was nicht schon am Ziel liegt
+        let steps = plan(infos, levels: lv, root: { d in self.videosRoot(d) })
+        total += oldInfos.isEmpty ? 0 : infos.filter(\.old).count
+        var reordered = 0
+        for p in steps {
+            if Task.isCancelled { return false }
+            let i = p.info
+            currentFile = i.job.url.lastPathComponent
+            var tags: [String] = [i.cam]
+            if let l = i.lens { tags.append(l) }
+            if let s = i.speed { tags.append(s) }
+            if let o = i.orient { tags.append(o) }
+            let dest = finalDir(p)
+            var ok = here(i) == dest.standardizedFileURL.path
+            if !ok {
+                if !i.old { _ = TagRunner.addFinderTags(tags, to: i.job.url) }   // Was nicht im Ordnernamen steht, als Finder-Tag
+                ok = await move(i.job.url, to: dest)
+                if ok {
+                    movedVideos += 1
+                    if i.old {
+                        reordered += 1
+                        if i.sub != "Stabilisiert" { await moveGyroCompanions(stem: i.job.url.deletingPathExtension().lastPathComponent, from: i.job.dir, to: p.target) }
                     }
                 }
-                var target = dreh.appendingPathComponent(FolderNames.videos)
-                if store.nestLevels {
-                    for p in parts { target = target.appendingPathComponent(Self.clean(p)) }
-                } else if !parts.isEmpty {
-                    target = target.appendingPathComponent(Self.clean(parts.joined(separator: FolderNames.separator)))
+            }
+            if ok {
+                counts[i.orient ?? "Video", default: 0] += 1
+                cameras[i.cam, default: 0] += 1
+                if let l = i.lens { lenses[l, default: 0] += 1 }
+                if let s = i.speed { speeds[s, default: 0] += 1 }
+            }
+            processed += 1
+        }
+        if reordered > 0 {
+            hints.insert("Neu geordnet: \(plural(reordered, "Clip", "Clips")) nach den aktuellen Einstellungen verschoben (Dateien unverändert)", at: 0)
+            // Final-Cut-Mediatheken in den neu geordneten Drehs → Hinweis zum Neu-Verknüpfen
+            for d in reorder {
+                guard let en = fm.enumerator(at: d, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+                while let u = en.nextObject() as? URL {
+                    if u.pathExtension.lowercased() == "fcpbundle" && !fcpLibraries.contains(u) { fcpLibraries.append(u) }
                 }
-                // Was nicht im Ordnernamen steht, als Finder-Tag – Datei bleibt unverändert
-                _ = TagRunner.addFinderTags(tags, to: i.job.url)
-                if i.cam.hasPrefix(LearnedStore.folderPrefix) {   // eigener Ordner (Exporte, Bildschirmaufnahmen …)
-                    target = dreh.appendingPathComponent(FolderNames.extras).appendingPathComponent(String(i.cam.dropFirst(LearnedStore.folderPrefix.count)))
-                }
-                let here = i.job.url.deletingLastPathComponent().standardizedFileURL.path
-                var ok = here == target.standardizedFileURL.path
-                if !ok { ok = await move(i.job.url, to: target); if ok { movedVideos += 1 } }
-                if ok {
-                    counts[i.orient ?? "Video", default: 0] += 1
-                    cameras[i.cam, default: 0] += 1
-                    if let l = i.lens { lenses[l, default: 0] += 1 }
-                    if let s = i.speed { speeds[s, default: 0] += 1 }
-                }
-                processed += 1
             }
         }
-        // leer gewordene alte Unterordner unter „Videos“ aufräumen
-        for dreh in byDreh.keys { removeEmptyDirs(dreh.appendingPathComponent(FolderNames.videos)) }
+
+        // leer gewordene alte Unterordner unter „Videos“ bzw. in den Ebenen-Ordnern aufräumen (nie Tims eigene Ordner)
+        var touched: [URL] = []
+        for d in steps.map({ $0.dreh }) + reorder where !touched.contains(where: { pk($0) == pk(d) }) { touched.append(d) }
+        func isIn(_ list: [URL], _ d: URL) -> Bool { list.contains { pk($0) == pk(d) } }
+        for dreh in touched {
+            let kids = ((try? fm.contentsOfDirectory(atPath: dreh.path)) ?? []).filter { !$0.hasPrefix(".") }
+            for k in kids {
+                let u = dreh.appendingPathComponent(k)
+                if FolderNames.isVideos(k) || Self.isSortedTree(u) { removeEmptyDirs(u) }
+            }
+            if isIn(reorder, dreh) {   // ganz leer gewordene alte Videos-/Ebenen-Ordner entfernen (nur wirklich leer)
+                let old = oldTops.filter { pk($0.deletingLastPathComponent()) == pk(dreh) }
+                for u in kids.filter(FolderNames.isVideos).map({ dreh.appendingPathComponent($0) }) + old {
+                    removeEmptyDirs(u)
+                    if ((try? fm.contentsOfDirectory(atPath: u.path)) ?? ["x"]).filter({ $0 != ".DS_Store" }).isEmpty { try? fm.removeItem(at: u) }
+                }
+            }
+            // Layout-Datei: beschreibt, mit welchen Einstellungen dieser Dreh sortiert ist
+            let useV = videosRoot(dreh).standardizedFileURL.path != dreh.standardizedFileURL.path
+            if isIn(declined, dreh) {
+                var s = readLayout(dreh) ?? LayoutSig(version: 1, useVideos: useV, videosName: FolderNames.videos, levels: lv, configLevels: ["?"],
+                                                      nest: cfg.nestLevels, separator: FolderNames.separator, declined: nil)
+                s.declined = curKey
+                writeLayout(s, to: dreh)
+            } else if isIn(reorder, dreh) || readLayout(dreh) == nil {
+                writeLayout(LayoutSig(version: 1, useVideos: useV, videosName: FolderNames.videos, levels: lv, configLevels: cfg.levels,
+                                      nest: cfg.nestLevels, separator: FolderNames.separator, declined: nil), to: dreh)
+            }
+        }
+        for d in declined where !isIn(touched, d) {
+            if var s = readLayout(d) { s.declined = curKey; writeLayout(s, to: d) }
+            else { writeLayout(LayoutSig(version: 1, useVideos: videosRoot(d).standardizedFileURL.path != d.standardizedFileURL.path, videosName: FolderNames.videos, levels: [], configLevels: ["?"], nest: cfg.nestLevels, separator: FolderNames.separator, declined: curKey), to: d) }
+        }
         return true
     }
 
@@ -855,8 +1292,10 @@ final class Sorter: ObservableObject {
     }
 
     /// Gibt es unter `root` schon Tagesordner? "top" = direkt darunter, "under" = eine Ebene tiefer bzw. im Namen hinten.
-    func existingDateLayout(_ root: URL) -> String? {
+    /// onlySorted: nur CamSort-Ebenen-Ordner betrachten (ohne Videos-Sammelordner liegen daneben Tims eigene Ordner).
+    func existingDateLayout(_ root: URL, onlySorted: Bool = false) -> String? {
         let kids = ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).filter { !$0.hasPrefix(".") }
+            .filter { !onlySorted || Self.isSortedTree(root.appendingPathComponent($0)) }
         func anyPartIsDay(_ n: String) -> Bool { n.components(separatedBy: FolderNames.separator).contains { store.isDayFolder($0) } }
         if kids.contains(where: { store.isDayFolder($0) }) { return "top" }
         if kids.contains(where: anyPartIsDay) { return "under" }
@@ -1371,7 +1810,7 @@ extension Sorter {
                         // Sony-Proxys (M4ROOT/SUB) und Vorschaubilder nicht als Clips einsortieren
                         let up = name.uppercased()
                         if (up == "SUB" || up == "THMBNL") && dir.lastPathComponent.uppercased() == "M4ROOT" { proxyDirs += 1; continue }
-                        if store.includeSubfolders { stack.append(e.url) } else { cardSkipped = true }
+                        if cfg.includeSubfolders { stack.append(e.url) } else { cardSkipped = true }
                         continue
                     }
                     found.append(Item(cam: cam, url: e.url, ext: ext))
@@ -1405,7 +1844,7 @@ extension Sorter {
         total = vids.count + others.count
         processed = 0
         phase = .sorting
-        var extras = store.levels.filter { ["lens", "length", "speed", "fps"].contains($0) }
+        var extras = cfg.levels.filter { ["lens", "length", "speed", "fps"].contains($0) }
         var emptied = Set<URL>()   // Ordner, aus denen etwas verschoben wurde → danach aufräumen, wenn leer
 
         // 3a) Videos analysieren (Ausrichtung, Zusatzebenen, Aufnahmezeit) – noch nichts verschieben
@@ -1433,7 +1872,7 @@ extension Sorter {
                     let sib = Set((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
                     parts.append(await lensName(for: v.url, asset: asset, siblings: sib) ?? "Objektiv unbekannt")
                 case "length":
-                    parts.append(en.timeIntervalSince(st) < store.lengthThreshold ? store.lengthShort : store.lengthLong)
+                    parts.append(en.timeIntervalSince(st) < cfg.lengthThreshold ? cfg.lengthShort : cfg.lengthLong)
                 case "speed":
                     let srt = [dir, v.cam.appendingPathComponent(FolderNames.side), v.cam.appendingPathComponent("Begleitdateien")]
                         .flatMap { d in [stem + ".SRT", stem + ".srt"].map { d.appendingPathComponent($0) } }
@@ -1441,8 +1880,8 @@ extension Sorter {
                     if let srt {
                         switch SRTSpeed.analyze(srt) {
                         case .speed(let kmh):
-                            parts.append(kmh >= store.standMin && kmh <= store.standMax ? "Stand"
-                                       : kmh >= store.moveMin && kmh <= store.moveMax ? "Fahrt" : "Dazwischen")
+                            parts.append(kmh >= cfg.standMin && kmh <= cfg.standMax ? "Stand"
+                                       : kmh >= cfg.moveMin && kmh <= cfg.moveMax ? "Fahrt" : "Dazwischen")
                         case .noGPS: parts.append("Ohne GPS")
                         case .unreadable: break
                         }
@@ -1460,7 +1899,7 @@ extension Sorter {
         if ownCams.contains(where: \.inDayFolder) { existing = "top" }
         else if ownCams.contains(where: { existingDateLayout($0.url) == "top" }) { existing = "under" }
         var dateChoice = "off"
-        if store.levels.contains("date") { dateChoice = existing ?? "under" }
+        if cfg.levels.contains("date") { dateChoice = existing ?? "under" }
         else if !projectsNeedDate(infos.map { ($0.v.url, $0.start) }) { dateChoice = "off" }
         else if let q = dateQuestion(starts: infos.map(\.start), existing: existing,
                                      example: ("Dreh/\(store.dayString(Date()))/A1/Hochkant", "Dreh/A1/\(store.dayString(Date()))/Hochkant")) {
@@ -1502,7 +1941,7 @@ extension Sorter {
             let base = root(for: v.cam, day: store.dayString(i.start))
             rootOfStem[v.cam.path, default: []].append((stem: v.url.deletingPathExtension().lastPathComponent, root: base))
             var target = base
-            if store.nestLevels { for p in i.parts { target = childDir(target, p) } }
+            if cfg.nestLevels { for p in i.parts { target = childDir(target, p) } }
             else if !i.parts.isEmpty { target = childDir(target, i.parts.joined(separator: FolderNames.separator)) }
             target = childDir(target, i.o)
             if samePath(dir, target) { continue }
@@ -1586,7 +2025,7 @@ extension Sorter {
 
         // 6) Gyrodaten erkennen (im Hintergrund, kein Main-Thread-Stau)
         stepLabel = "Gyrodaten prüfen …"
-        let suffixes = store.gyroSuffixList
+        let suffixes = cfg.gyroSuffixList
         let bases = folders
         let offer: [URL] = await Task.detached(priority: .userInitiated) {
             let r = await GyroRunner.collectGyroClips(in: bases, suffixes: suffixes)
@@ -1693,7 +2132,7 @@ extension Sorter {
 
     /// Kamera-Name nur für die Übersicht (ohne Rückfrage)
     private func quickCamera(_ url: URL, base: URL, selfCam: Bool) async -> String {
-        if store.ownCameraFolders {
+        if cfg.ownCameraFolders {
             if selfCam { return base.lastPathComponent }
             let rel = url.standardizedFileURL.pathComponents.dropFirst(base.standardizedFileURL.pathComponents.count)
             return rel.count > 1 ? rel.first! : "lose Dateien"
@@ -1767,7 +2206,7 @@ extension Sorter {
         // Unsortierte Dateien einsammeln (CamSort-Ausgabeordner und Projektordner nicht betreten)
         var skip = Set(outputNames.map(FolderNames.fold))
         for f in ["Stabilisiert", "Original", "Gyroflow-Projekte", "Musik", "ZIP", "FCP", "Sonstiges"] { skip.insert(FolderNames.fold(f)) }
-        if store.ownCameraFolders { for f in store.specialFolders { skip.insert(FolderNames.fold(f)) } }
+        if cfg.ownCameraFolders { for f in store.specialFolders { skip.insert(FolderNames.fold(f)) } }
         let projectPaths = Set(projects.map { $0.url.standardizedFileURL.path })
         var files: [URL] = []
         var sortedPresent = false
@@ -1786,9 +2225,9 @@ extension Sorter {
                     if Self.projectExt.contains(u.pathExtension.lowercased()) { files.append(u); continue }
                     if v?.isPackage == true { continue }
                     if projectPaths.contains(u.standardizedFileURL.path) { continue }
-                    if FolderNames.isVideos(name) || FolderNames.isOrientation(name) || FolderNames.hasFpsPart(name) { sortedPresent = true; continue }
+                    if FolderNames.isVideos(name) || FolderNames.hasOrientationPart(name) || FolderNames.hasFpsPart(name) || FolderNames.isSceneFolder(name) { sortedPresent = true; continue }
                     if skip.contains(FolderNames.fold(name)) { continue }
-                    if store.includeSubfolders || store.ownCameraFolders { stack.append(u) }
+                    if cfg.includeSubfolders || cfg.ownCameraFolders { stack.append(u) }
                     continue
                 }
                 if v?.isRegularFile == true { files.append(u) }
@@ -1799,7 +2238,7 @@ extension Sorter {
 
         // Modus „Meine Kameraordner“ mit direkt gewähltem Kameraordner: Projekt/<Kamera>/…
         var selfCam = false
-        if store.ownCameraFolders {
+        if cfg.ownCameraFolders {
             if let p = projects.first { selfCam = fm.fileExists(atPath: p.url.appendingPathComponent(base.lastPathComponent).path) }
             else if let r = cameraFolders(in: base, skip: ownSkipNames()), r.cams.count == 1, r.cams[0].group == nil { selfCam = true }
         }

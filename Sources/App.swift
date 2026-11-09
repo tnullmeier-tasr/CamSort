@@ -154,6 +154,9 @@ struct ContentView: View {
 
 struct Header: View {
     @EnvironmentObject var store: LearnedStore
+    @EnvironmentObject var sorter: Sorter
+    @EnvironmentObject var selects: SelectsRunner
+    @EnvironmentObject var gyro: GyroRunner
     @State private var appear = false
     @State private var showLearned = false
     @State private var showTheme = false
@@ -191,6 +194,16 @@ struct Header: View {
             .buttonStyle(.plain)
             .help("Hintergrundfarbe ändern")
             .popover(isPresented: $showTheme) { ThemePicker().environmentObject(theme) }
+            // Einstellungen in jeder Phase erreichbar (Start, Sortieren, Fertig, nach Gyroflow, Abgebrochen) – ein gemeinsames Sheet
+            Button { sorter.showSettings = true } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(8)
+                    .background(Circle().fill(Theme.card))
+            }
+            .buttonStyle(.plain)
+            .help("Einstellungen")
+            .keyboardShortcut(",", modifiers: .command)
             Button { showLearned = true } label: {
                 Label("Gelernt", systemImage: "graduationcap.fill")
                     .font(.system(size: 12, weight: .semibold))
@@ -203,6 +216,10 @@ struct Header: View {
         .padding(.horizontal, 32)
         .padding(.bottom, 18)
         .sheet(isPresented: $showLearned) { LearnedView().environmentObject(store) }
+        .background(Color.clear.sheet(isPresented: $sorter.showSettings) {
+            SettingsView(runActive: sorter.isRunning || gyro.state == .running || gyro.state == .paused)
+                .environmentObject(store).environmentObject(selects)
+        })
         .onAppear { withAnimation(.spring(response: 0.7, dampingFraction: 0.55)) { appear = true } }
     }
 }
@@ -216,7 +233,6 @@ struct IdleView: View {
     @EnvironmentObject var sorter: Sorter
     @EnvironmentObject var store: LearnedStore
     @EnvironmentObject var importer: ImportRunner
-    @State private var showSettings = false
 
     private var settingsSummary: String {
         var p: [String] = []
@@ -312,7 +328,7 @@ struct IdleView: View {
             .padding(.horizontal, 12).padding(.vertical, 6)
             .glassBackground(12)
 
-            Button { showSettings = true } label: {
+            Button { sorter.showSettings = true } label: {
                 HStack {
                     Image(systemName: "gearshape.fill")
                     Text(settingsSummary).lineLimit(2).multilineTextAlignment(.leading)
@@ -324,7 +340,6 @@ struct IdleView: View {
                 .glassBackground(12)
             }
             .buttonStyle(.plain)
-            .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store).environmentObject(selects) }
 
             HStack(spacing: 8) {
                 Button { importer.open() } label: {
@@ -341,7 +356,7 @@ struct IdleView: View {
             Spacer(minLength: 0)
 
             Button { sorter.start() } label: {
-                Label(sorter.folders.contains { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) }
+                Label(sorter.folders.contains(where: Sorter.looksSorted)
                       ? "Aktualisieren" : "Sortieren starten", systemImage: "wand.and.stars")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .frame(maxWidth: .infinity).frame(height: 50)
@@ -355,7 +370,7 @@ struct IdleView: View {
             .buttonStyle(.plain)
             .disabled(sorter.folders.isEmpty)
 
-            if sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) })
+            if sorter.folders.contains(where: Sorter.looksSorted)
                 || (store.ownCameraFolders && !sorter.folders.isEmpty) {
                 HStack(spacing: 10) {
                     Button { timeline.open(folders: sorter.folders) } label: {
@@ -372,7 +387,7 @@ struct IdleView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
             }
             if (store.autoGyro || store.showGyroButton),
-               sorter.folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(FolderNames.videos).path) })
+               sorter.folders.contains(where: Sorter.looksSorted)
                 || (store.ownCameraFolders && !sorter.folders.isEmpty) {
                 HStack(spacing: 8) {
                     Button { sorter.startGyro() } label: {
@@ -1012,10 +1027,21 @@ struct LearnedView: View {
 struct SettingsView: View {
     @EnvironmentObject var store: LearnedStore
     @Environment(\.dismiss) private var dismiss
+    /// Läuft gerade ein Lauf? Dann gelten Änderungen erst ab dem nächsten Lauf (der laufende nutzt eine Momentaufnahme).
+    var runActive = false
+    @AppStorage("useVideosFolder") private var useVideosFolder = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Einstellungen").font(.title2.bold()).padding(.bottom, 10)
+            if runActive {
+                Label("Ein Lauf ist aktiv – Änderungen gelten ab dem nächsten Lauf.", systemImage: "info.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.18)))
+                    .padding(.bottom, 10)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     section("Sortieren")
@@ -1063,6 +1089,9 @@ struct SettingsView: View {
                         Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
                     }
                     if store.compactLayout {
+                        WithHelp(title: "Videos-Sammelordner", text: "An (bisheriges Verhalten): Alle Video-Ebenen liegen in einem Ordner „Videos“ im Dreh – z. B. Pitbike/Videos/Sony ZV-E1/Quer.\n\nAus: Die Ebenen (Kamera › Objektiv › Ausrichtung …) liegen direkt im Dreh-Ordner – z. B. Pitbike/Sony ZV-E1/Quer bzw. Pitbike/Sony ZV-E1/FE 24-70/Hochkant. Fotos, Begleitdateien und Extras bleiben wie bisher in ihren eigenen Ordnern.\n\nErneutes Einlesen bleibt sicher: CamSort erkennt die sortierten Ordner an Ausrichtung, Bildrate bzw. Szene. Ist keine dieser Ebenen im Ordner-Aufbau aktiv, legt CamSort den Videos-Ordner trotzdem an.\n\nWer unter jedem Kameraordner nur Hochkant/Quer möchte (Pitbike/E1/Hochkant): Modus „Meine Kameraordner“.\n\nBereits sortierte Drehs: Beim erneuten Einwerfen fragt CamSort, ob sie nach den neuen Einstellungen neu geordnet werden sollen (nur verschieben).") {
+                            Toggle("Videos-Sammelordner anlegen", isOn: $useVideosFolder)
+                        }
                         LevelBuilder()
                     } else {
                         Text("Beispiel: Dreh 1/Videos/Sony Alpha 1/Quer").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
@@ -1415,6 +1444,7 @@ struct FolderNamingEditor: View {
 
 /// Ordner-Baukasten: Kriterien an/aus, Reihenfolge, ein Ordner oder Unterordner – mit Vorschau
 struct LevelBuilder: View {
+    @AppStorage("useVideosFolder") private var useVideosFolderPreview = true
     @EnvironmentObject var store: LearnedStore
     @AppStorage("fnSeparator") private var separator = " · "
 
@@ -1497,7 +1527,7 @@ struct LevelBuilder: View {
                 }
             }
             .toggleStyle(.switch).controlSize(.small)
-            Text("Vorschau: Dreh/\(FolderNames.videos)/\(LevelBuilder.samplePath(store, separator: separator))C0001.MP4")
+            Text("Vorschau: Dreh/\(useVideosFolderPreview ? FolderNames.videos + "/" : "")\(LevelBuilder.samplePath(store, separator: separator))C0001.MP4")
                 .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
