@@ -1049,18 +1049,20 @@ struct SettingsView: View {
                         Toggle("Meine Kameraordner (nur Hochkant / Quer)", isOn: $store.ownCameraFolders)
                     }
                     WithHelp(title: "Projekte trennen", text: "Liegt zwischen den Clips eine auffällig lange Pause (z. B. Vormittag ein Auftrag, Nachmittag ein zweiter), schlägt CamSort vor, die Dateien in zwei Projekte zu trennen – das ist nur ein Vorschlag, CamSort fragt immer nach. Auffällig heißt: mindestens so lang wie die Mindestpause UND deutlich länger als die üblichen Pausen dieses Drehs (mind. 4× der typischen Pause). Regelmäßige Pausen eines Drehs lösen also keine Frage aus. Über Mitternacht ohne lange Pause bleibt es ein Projekt.\n\nGetrennt wird in Unterordner IM eingeworfenen Ordner: Pitbike/2026-11-08 Vormittag/…, Pitbike/2026-11-08 Nachmittag/… – darin die gewohnte Struktur (Videos/… bzw. A1/Hochkant). Die Namen kannst du in der Frage ändern. Steht im Projektnamen ein Datum, wird der Ordner nicht mehr umbenannt. Fotos kommen ins Projekt ihres Aufnahmedatums, Begleitdateien zu ihrem Clip.\n\nLiegt eine Kamera ganz allein in einem Zeitblock, ist vielleicht ihre Uhr falsch gestellt – CamSort weist darauf hin und bietet an, sie dem Hauptprojekt zuzuordnen.\n\nBeim erneuten Einlesen erkennt CamSort die Projektordner (unsichtbare Datei .camsort-projekt): Neue Clips, die zeitlich passen, landen ohne Frage im passenden Projekt.\n\nFragen: Vorschlag mit Rückfrage. Immer trennen: ohne Frage (außer bei Verdacht auf falsche Kamerauhr). Nie: nie trennen.") {
+                        Text("Projekte trennen").font(.system(size: 12)).fixedSize()
                         Picker("Projekte trennen", selection: $store.projectMode) {
                             Text("Fragen").tag("ask"); Text("Immer trennen").tag("always"); Text("Nie").tag("never")
-                        }.frame(width: 300)
+                        }.labelsHidden().frame(width: 300)
                     }
                     if store.projectMode != "never" {
                         Stepper("Pause für neues Projekt: mind. \(Sorter.durationText(store.projectGapMinutes * 60))", value: $store.projectGapMinutes, in: 30...720, step: 30)
                             .font(.system(size: 12))
                     }
                     WithHelp(title: "Tagesordner", text: "Stammen die Clips von mehreren Tagen, kann CamSort zusätzlich nach Aufnahmetag ordnen – oben (Dreh/2026-10-12/A1/Hochkant) oder unter der Kamera (Dreh/A1/2026-10-12/Hochkant). „Fragen“: CamSort fragt nur, wenn wirklich mehrere Tage drin sind. Gibt es schon Tagesordner, wird die vorhandene Struktur ohne Frage weitergeführt.\n\nDas Datum kommt aus den Video-Metadaten (Aufnahmezeit), nicht aus dem Dateidatum.") {
+                        Text("Tagesordner").font(.system(size: 12)).fixedSize()
                         Picker("Tagesordner", selection: $store.dateMode) {
                             Text("Fragen").tag("ask"); Text("Oben").tag("top"); Text("Unter der Kamera").tag("under"); Text("Nie").tag("off")
-                        }.frame(width: 300)
+                        }.labelsHidden().frame(width: 300)
                     }
                     HStack {
                         Text("Datumsformat").font(.system(size: 12))
@@ -1068,9 +1070,10 @@ struct SettingsView: View {
                         Text("→ \(store.dayString(Date()))").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
                     WithHelp(title: "Nach Bildrate fragen", text: "Haben die neuen Clips mindestens zwei verschiedene Bildraten (z. B. 25 fps und 100 fps Zeitlupe), fragt CamSort vor dem Verschieben, ob zusätzlich nach Bildrate sortiert werden soll – z. B. Dreh/A1/50 fps/Hochkant. Bei nur einer Bildrate wird nicht gefragt.\n\n„Ja“ gilt nur für diesen Lauf. Mit „Antwort merken“ wird „Ja“ zur festen Ebene im Ordner-Aufbau, „Nein“ stellt die Frage hier auf „Nie“.\n\nGibt es im Dreh schon FPS-Ordner, führt CamSort die Struktur ohne Frage weiter.") {
+                        Text("Bildrate").font(.system(size: 12)).fixedSize()
                         Picker("Bildrate", selection: $store.fpsMode) {
                             Text("Fragen").tag("ask"); Text("Nie").tag("off")
-                        }.frame(width: 300)
+                        }.labelsHidden().frame(width: 300)
                         .disabled(store.levels.contains("fps"))
                     }
                     if store.levels.contains("fps") {
@@ -1080,10 +1083,11 @@ struct SettingsView: View {
                         Toggle("Aufnahmen bis 4 Uhr zählen zum Vortag", isOn: $store.nightToPrevDay)
                     }
                     WithHelp(title: "Datum im Ordnernamen", text: "Nach erfolgreichem Sortieren kann CamSort den eingeworfenen Ordner umbenennen, z. B. „Pitbike“ → „2026-10-12 Pitbike“ (frühestes Aufnahmedatum der Clips; bei mehreren Tagen auch als Zeitraum). Nur der Ordner wird umbenannt, keine Datei. Steht schon ein Datum im Namen, wird nicht gefragt. Gibt es den neuen Namen schon oder ist der Ordner gesperrt, bleibt alles wie es ist und CamSort meldet das.") {
+                        Text("Datum im Namen").font(.system(size: 12)).fixedSize()
                         Picker("Datum im Namen", selection: $store.renameMode) {
                             Text("Fragen").tag("ask"); Text("Vorne").tag("front-start"); Text("Vorne, Zeitraum").tag("front-range")
                             Text("Hinten").tag("back-start"); Text("Hinten, Zeitraum").tag("back-range"); Text("Nie").tag("off")
-                        }.frame(width: 300)
+                        }.labelsHidden().frame(width: 300)
                     }
                     WithHelp(title: "Kompakte Ordner", text: "An (empfohlen): Alle Merkmale stehen in EINEM Ordnernamen statt in verschachtelten Ordnern – z. B. Videos/Sony Alpha 1 · FE 24-70 · Quer. So siehst du sofort, was drin ist, und bist mit einem Klick beim Clip. Neue Ordner entstehen nur, wenn es im Dreh wirklich etwas anderes gibt (zweite Kamera, Hochkant-Clips …). XML, LRF und SRT landen gemeinsam in „Begleitdateien“.\n\nEin Dreh ist jeder Ordner mit Clips – bei Kundenordnern also jeder Unterordner. Kartenordner wie DCIM oder PRIVATE zählen zum Dreh darüber.\n\nAus: ausführliche Struktur mit eigenem Ordner pro Ebene (Videos/Kamera/Quer).") {
                         Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
@@ -1424,9 +1428,10 @@ struct FolderNamingEditor: View {
                 }.font(.system(size: 12))
             }
             WithHelp(title: "Trennzeichen", text: "Zeichen zwischen den Teilen eines Ordnernamens.") {
+                Text("Trennzeichen").font(.system(size: 12)).fixedSize()
                 Picker("Trennzeichen", selection: $separator) {
                     Text("·").tag(" · "); Text("-").tag(" - "); Text("_").tag("_"); Text("|").tag(" | ")
-                }.pickerStyle(.segmented).frame(width: 200)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 200)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Vorschau").font(.system(size: 11, weight: .semibold))
@@ -1476,26 +1481,32 @@ struct LevelBuilder: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             WithHelp(title: "Ordner-Aufbau", text: "Hier legst du fest, wonach die Videos in jedem Dreh geordnet werden. Kriterien einschalten und mit den Pfeilen sortieren – oben = zuerst.\n\n„Ein Ordner“: alles steht in EINEM Ordnernamen (z. B. Szene 02 · Einblendungen). „Unterordner“: jedes Kriterium ist eine eigene Ebene (Szene 02 / Einblendungen).\n\nWas nicht im Ordner steht (z. B. Kamera, Hochkant/Quer), kommt als Finder-Tag an den Clip. Jeder Clip liegt nur einmal vor – nichts wird kopiert. Beim nächsten „Aktualisieren“ ordnet CamSort bestehende Drehs nach dem neuen Aufbau um.") {
+                Text("Aufbau").font(.system(size: 12)).fixedSize()
                 Picker("Aufbau", selection: $store.nestLevels) {
                     Text("Ein Ordner").tag(false); Text("Unterordner").tag(true)
-                }.pickerStyle(.segmented).frame(width: 220)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 220)
             }
             ForEach(ordered, id: \.id) { lvl in
                 let on = store.levels.contains(lvl.id)
                 let idx = store.levels.firstIndex(of: lvl.id)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Toggle(isOn: Binding(get: { on }, set: { v in
-                            if v { store.levels.append(lvl.id) } else { store.levels.removeAll { $0 == lvl.id } }
-                        })) { Label(lvl.name, systemImage: lvl.icon).font(.system(size: 12)) }
-                        Spacer()
-                        if let i = idx {
-                            Text("\(i + 1).").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
-                            Button { store.levels.swapAt(i, i - 1) } label: { Image(systemName: "chevron.up") }
-                                .disabled(i == 0)
-                            Button { store.levels.swapAt(i, i + 1) } label: { Image(systemName: "chevron.down") }
-                                .disabled(i == store.levels.count - 1)
+                        Label(lvl.name, systemImage: lvl.icon).font(.system(size: 12))
+                            .lineLimit(1).foregroundStyle(on ? .primary : .secondary)
+                        Spacer(minLength: 8)
+                        HStack(spacing: 6) {
+                            if let i = idx {
+                                Text("\(i + 1).").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
+                                Button { store.levels.swapAt(i, i - 1) } label: { Image(systemName: "chevron.up") }
+                                    .disabled(i == 0)
+                                Button { store.levels.swapAt(i, i + 1) } label: { Image(systemName: "chevron.down") }
+                                    .disabled(i == store.levels.count - 1)
+                            }
                         }
+                        .frame(width: 70, alignment: .trailing)
+                        Toggle(lvl.name, isOn: Binding(get: { on }, set: { v in
+                            if v { store.levels.append(lvl.id) } else { store.levels.removeAll { $0 == lvl.id } }
+                        })).labelsHidden()
                     }
                     .buttonStyle(.borderless)
                     if on && lvl.id == "scene" {
@@ -1507,7 +1518,7 @@ struct LevelBuilder: View {
                             Stepper("Kurz bis \(Int(store.lengthThreshold)) Sek.", value: $store.lengthThreshold, in: 5...600, step: 5)
                             HStack {
                                 TextField("Kurz", text: $store.lengthShort).frame(width: 130)
-                                Text("bis \(Int(store.lengthThreshold)) s · darüber")
+                                Text("bis \(Int(store.lengthThreshold)) s · darüber").fixedSize()
                                 TextField("Lang", text: $store.lengthLong).frame(width: 110)
                             }.textFieldStyle(.roundedBorder)
                         }
@@ -1529,6 +1540,7 @@ struct LevelBuilder: View {
             .toggleStyle(.switch).controlSize(.small)
             Text("Vorschau: Dreh/\(useVideosFolderPreview ? FolderNames.videos + "/" : "")\(LevelBuilder.samplePath(store, separator: separator))C0001.MP4")
                 .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
         }
