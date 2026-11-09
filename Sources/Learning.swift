@@ -75,8 +75,9 @@ final class LearnedStore: ObservableObject {
     private var syncing = false
     /// Modus „Meine Kameraordner“: eigene Ordner pro Kamera übernehmen, darin nur Hochkant/Quer
     @Published var ownCameraFolders: Bool { didSet { d.set(ownCameraFolders, forKey: "ownCameraFolders") } }
-    /// Beim Stabilisieren Seitenverhältnis beibehalten, wenn der Clip nicht 16:9 / 9:16 ist (z. B. DJI Avata 4:3)
-    @Published var gyroKeepAspect: Bool { didSet { d.set(gyroKeepAspect, forKey: "gyroKeepAspect") } }
+    /// Gyroflow: aus dem Preset nur Glättung + dynamisches Zoomen übernehmen; Objektiv, Größe, Bildrate, Codec, Bitrate, Ton pro Clip
+    /// (ersetzt das frühere „gyroKeepAspect“). Aus = Preset komplett wie bisher.
+    @Published var gyroMatchSource: Bool { didSet { d.set(gyroMatchSource, forKey: "gyroMatchSource") } }
     /// Tagesordner: "ask" (nur fragen, wenn mehrere Tage), "top" (Tag über der Kamera), "under" (Tag unter der Kamera), "off"
     @Published var dateMode: String { didSet { d.set(dateMode, forKey: "dateMode") } }
     /// Datumsformat für Tagesordner (DateFormatter), Standard JJJJ-MM-TT
@@ -194,7 +195,7 @@ final class LearnedStore: ObservableObject {
             levels = l
         }
         ownCameraFolders = d.object(forKey: "ownCameraFolders") as? Bool ?? false
-        gyroKeepAspect = d.object(forKey: "gyroKeepAspect") as? Bool ?? true
+        gyroMatchSource = d.object(forKey: "gyroMatchSource") as? Bool ?? true
         dateMode = d.string(forKey: "dateMode") ?? "ask"
         fpsMode = d.string(forKey: "fpsMode") ?? "ask"
         dateFormat = d.string(forKey: "dateFormat") ?? "yyyy-MM-dd"

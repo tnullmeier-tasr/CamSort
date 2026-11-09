@@ -73,7 +73,17 @@ Optionale Ebene *Bildrate (FPS)* im Ordner-Baukasten (kompakt und „Meine Kamer
 - Bildrate wird im selben Ladevorgang wie die Bildgröße gelesen (`track.load(.naturalSize, .preferredTransform, .nominalFrameRate)`).
 
 ## Gyrodaten erkennen
-Nach dem Sortieren prüft CamSort jeden Clip auf Bewegungsdaten, die Gyroflow lesen kann (Erkennung wie Gyroflows *telemetry-parser*): Sony (XML), DJI mit eingebetteten Gyrodaten (`djmd` + `DJI meta`, z. B. Avata/Osmo Action), GoPro (GPMF), Insta360. Schon stabilisierte Clips sind nicht dabei. Der Fertig-Bildschirm bietet dann an: *„X Clips enthalten Gyrodaten (A1: 10, Avata: 4) – jetzt stabilisieren?“*. Clips, die nicht 16:9/9:16 sind (4:3, 1:1), behalten beim Stabilisieren ihr Format (`-p "{ 'output_width': …, 'output_height': … }"` an die Gyroflow-CLI; das Preset bleibt unverändert). Einstellbar unter *Gyroflow*.
+Nach dem Sortieren prüft CamSort jeden Clip auf Bewegungsdaten, die Gyroflow lesen kann (Erkennung wie Gyroflows *telemetry-parser*): Sony (XML), DJI mit eingebetteten Gyrodaten (`djmd` + `DJI meta`, z. B. Avata/Osmo Action), GoPro (GPMF), Insta360. Schon stabilisierte Clips sind nicht dabei. Der Fertig-Bildschirm bietet dann an: *„X Clips enthalten Gyrodaten (A1: 10, Avata: 4) – jetzt stabilisieren?“*.
+
+### Ausgabe wie Eingabeclip (Standard)
+Aus deinem Preset übernimmt CamSort **nur Glättung und dynamisches Zoomen**. Objektivprofil, Auflösung, Format, Bildrate, Codec und Ton richten sich nach jedem Clip – ein Preset passt so für alle Kameras in einem Lauf.
+
+- CamSort schreibt dafür eine reduzierte Kopie `~/Library/Application Support/CamSort/Gyroflow-Presets/.camsort-nur-stabilisierung.gyroflow` (Whitelist aus `stabilization`: `method`, `smoothing_params`, Horizont-Ausgleich, `fov`, `adaptive_zoom_window`, `adaptive_zoom_center_offset`, `adaptive_zoom_method`, `max_zoom`, `max_zoom_iterations`, `fixed_zoom`, `zoom_limit_whole_clip`). Dein Preset bleibt unverändert. Ist es unlesbar, nutzt CamSort es komplett und meldet das.
+- Ohne `calibration_data` wählt Gyroflow das Objektivprofil pro Clip selbst aus den Metadaten (Sony, DJI, GoPro, Insta360).
+- Pro Clip gehen an die Gyroflow-CLI: `-p {"output_width":…,"output_height":…,"codec":…,"codec_options":…,"bitrate":…,"audio":true,"audio_codec":"Copy"}` – kodierte Quellgröße (16:9, 9:16, 4:3, 1:1), H.264→H.264, HEVC→H.265, ProRes→ProRes (gleiches Profil), sonst H.265; Bitrate ≈ Quelle (mind. 10 Mbit/s); Ton wird kopiert (sonst AAC; Clips ohne Ton gehen trotzdem).
+- Bildrate: Gyroflow rendert immer mit der Quell-Bildrate; `video_speed` wird bewusst nicht übernommen.
+
+Aus: Preset komplett wie früher. Einstellbar unter *Einstellungen › Gyroflow*.
 
 ## Gyroflow-Preset einrichten (einmalig)
 1. Gyroflow öffnen, einen Sony-Clip hineinziehen, Einstellungen wie gewohnt.

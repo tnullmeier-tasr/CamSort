@@ -208,6 +208,17 @@ final class GyroRunner: ObservableObject {
             state = .failed("Das Preset „\((preset as NSString).lastPathComponent)“ ist nicht lesbar (\(preset)). Bitte unter Einstellungen › Gyroflow einmal neu wählen – CamSort speichert sich dann eine eigene Kopie.")
             return
         }
+        // „Ausgabe wie Eingabeclip“: aus Tims Preset nur Glättung + dynamisches Zoomen in eine eigene Kopie übernehmen.
+        // Das Original bleibt unangetastet; klappt das nicht, wird wie bisher das Original verwendet.
+        var usedPreset = preset
+        if store.gyroMatchSource {
+            let target = LearnedStore.presetDir.appendingPathComponent(Self.reducedPresetName)
+            switch Self.writeReducedPreset(from: URL(fileURLWithPath: preset), to: target) {
+            case .success(let u): usedPreset = u.path
+            case .failure(let e):
+                errors.append("Hinweis: \(e.message) – Gyroflow nutzt deshalb dein Preset komplett (inkl. Objektiv und Export-Format daraus).")
+            }
+        }
         var clips: (hochkant: [URL], quer: [URL]) = ([], [])
         preparing = true
         if list == nil { clips = await collectSonyClips(in: folders) }
@@ -229,7 +240,7 @@ final class GyroRunner: ObservableObject {
         index = 0
         state = .running
         eta.begin()
-        Task { await runAll(exe: exe, preset: preset, hochkantCount: clips.hochkant.count, folders: folders) }
+        Task { await runAll(exe: exe, preset: usedPreset, hochkantCount: clips.hochkant.count, folders: folders) }
     }
 
     nonisolated static func isPortraitFolder(_ u: URL) async -> Bool {
@@ -239,15 +250,85 @@ final class GyroRunner: ObservableObject {
         return await videoOrientation(u) == FolderNames.portrait
     }
 
-    /// Kodierte Bildgröße, wenn sie nicht 16:9 bzw. 9:16 ist (z. B. 4:3 der DJI Avata) – sonst nil.
-    nonisolated static func nonWideSize(_ u: URL) async -> (w: Int, h: Int)? {
-        let a = AVURLAsset(url: u)
+    // MARK: Preset reduzieren / Ausgabe pro Clip
+
+    nonisolated static let reducedPresetName = ".camsort-nur-stabilisierung.gyroflow"
+
+    struct PresetError: Error { let message: String }
+
+    /// Schlüssel unter "stabilization", die CamSort aus dem Preset übernimmt (Whitelist).
+    /// Belegt in gyroflow/src/core/lib.rs (export_gyroflow_data / import_gyroflow_data):
+    /// Glättung: method, smoothing_params, Horizont-Ausgleich (gehört in Gyroflow zur Glättung);
+    /// dynamisches Zoomen: fov, adaptive_zoom_*, max_zoom (Zoom-Grenze), max_zoom_iterations, fixed_zoom, zoom_limit_whole_clip.
+    /// Nicht übernommen u. a.: calibration_data (Objektiv), frame_readout_* (kommt vom Objektivprofil),
+    /// lens_correction_amount, video_speed (würde Bildrate/Ton ändern), output (Größe/Codec), synchronization.
+    nonisolated static let presetStabilizationKeys: Set<String> = [
+        "method", "smoothing_params",
+        "horizon_lock_amount", "horizon_lock_roll", "horizon_lock_pitch_enabled", "horizon_lock_pitch",
+        "automatic_lock", "turn_threshold", "turn_smoothing_ms", "turn_multiplier", "tilt_accel_limit",
+        "use_gravity_vectors", "horizon_lock_integration_method",
+        "fov", "adaptive_zoom_window", "adaptive_zoom_center_offset", "adaptive_zoom_method",
+        "max_zoom", "max_zoom_iterations", "fixed_zoom", "zoom_limit_whole_clip",
+    ]
+
+    /// Liest Tims Preset (nur lesend) und schreibt eine reduzierte Kopie nach `target`.
+    nonisolated static func writeReducedPreset(from source: URL, to target: URL) -> Result<URL, PresetError> {
+        guard let data = try? Data(contentsOf: source), !data.isEmpty else {
+            return .failure(PresetError(message: "Preset „\(source.lastPathComponent)“ ließ sich nicht lesen"))
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failure(PresetError(message: "Preset „\(source.lastPathComponent)“ ist kein gültiges Gyroflow-JSON"))
+        }
+        guard let stab = obj["stabilization"] as? [String: Any] else {
+            return .failure(PresetError(message: "Preset „\(source.lastPathComponent)“ enthält keinen Abschnitt „stabilization“"))
+        }
+        let kept = stab.filter { presetStabilizationKeys.contains($0.key) }
+        guard !kept.isEmpty else {
+            return .failure(PresetError(message: "Preset „\(source.lastPathComponent)“ enthält keine Glättungs-/Zoom-Werte"))
+        }
+        // Minimalstruktur: ohne "videofile" behandelt Gyroflow die Datei als Preset (cli.rs detect_types)
+        var out: [String: Any] = ["title": "CamSort: nur Stabilisierung + dynamischer Zoom", "stabilization": kept]
+        out["version"] = obj["version"] ?? 2
+        do {
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let json = try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys])
+            try json.write(to: target, options: .atomic)
+            return .success(target)
+        } catch {
+            return .failure(PresetError(message: "Reduziertes Preset konnte nicht gespeichert werden (\(error.localizedDescription))"))
+        }
+    }
+
+    /// Gyroflow-Ausgabeparameter (-p) passend zum Clip: kodierte Größe (Gyroflow rechnet auf kodierten Pixeln und
+    /// übernimmt die Rotation selbst), gleiche Codec-Familie, Bitrate ≈ Quelle, Ton an (Original kopieren, sonst AAC).
+    /// Bildrate: Gyroflow rendert immer mit der Quell-Bildrate (kein -p-Schlüssel dafür nötig).
+    nonisolated static func outputParams(for clip: URL) async -> String? {
+        let a = AVURLAsset(url: clip)
         guard let found = try? await a.loadTracks(withMediaType: .video), let t = found.first,
-              let size = try? await t.load(.naturalSize) else { return nil }
-        let w = Int(abs(size.width).rounded()), h = Int(abs(size.height).rounded())
+              let props = try? await t.load(.naturalSize, .estimatedDataRate, .formatDescriptions) else { return nil }
+        let w = Int(abs(props.0.width).rounded()), h = Int(abs(props.0.height).rounded())
         guard w > 0, h > 0 else { return nil }
-        let r = Double(max(w, h)) / Double(min(w, h))
-        return abs(r - 16.0 / 9.0) < 0.03 ? nil : (w, h)
+        var p: [String: Any] = ["output_width": w, "output_height": h, "audio": true, "audio_codec": "Copy"]
+        let sub: FourCharCode = props.2.first.map { CMFormatDescriptionGetMediaSubType($0) } ?? 0
+        switch sub {
+        case kCMVideoCodecType_H264:
+            p["codec"] = "H.264/AVC"
+        case kCMVideoCodecType_AppleProRes422Proxy: p["codec"] = "ProRes"; p["codec_options"] = "Proxy"
+        case kCMVideoCodecType_AppleProRes422LT:    p["codec"] = "ProRes"; p["codec_options"] = "LT"
+        case kCMVideoCodecType_AppleProRes422:      p["codec"] = "ProRes"; p["codec_options"] = "Standard"
+        case kCMVideoCodecType_AppleProRes422HQ:    p["codec"] = "ProRes"; p["codec_options"] = "HQ"
+        case kCMVideoCodecType_AppleProRes4444:     p["codec"] = "ProRes"; p["codec_options"] = "4444"
+        case kCMVideoCodecType_AppleProRes4444XQ:   p["codec"] = "ProRes"; p["codec_options"] = "4444XQ"
+        default:
+            p["codec"] = "H.265/HEVC"   // HEVC und alles andere
+        }
+        if p["codec"] as? String != "ProRes" {
+            // Mbit/s, aufgerundet, mindestens 10 (Gyroflow nimmt ohnehin max(Vorgabe, Quellbitrate))
+            let mbps = Double(props.1) / 1_000_000
+            p["bitrate"] = max(10, Int(mbps.rounded(.up)))
+        }
+        guard let d = try? JSONSerialization.data(withJSONObject: p, options: [.sortedKeys]) else { return nil }
+        return String(data: d, encoding: .utf8)
     }
 
     private func runAll(exe: URL, preset: String, hochkantCount: Int, folders: [URL]) async {
@@ -288,10 +369,10 @@ final class GyroRunner: ObservableObject {
         let p = Process()
         p.executableURL = exe
         var args = [clip.path, "--preset", preset, "-t", suffix, "-f", "--stdout-progress"]
-        // Seitenverhältnis beibehalten (z. B. Avata 4:3): Ausgabegröße = Quellgröße statt Preset-Größe.
-        // Gyroflow-CLI: -p/--out-params "{ 'output_width': W, 'output_height': H }" (docs.gyroflow.xyz › Command line)
-        if store.gyroKeepAspect, let sz = await Self.nonWideSize(clip) {
-            args += ["-p", "{ 'output_width': \(sz.w), 'output_height': \(sz.h) }"]
+        // Ausgabe wie Eingabeclip: Größe/Codec/Bitrate/Ton pro Clip über -p/--out-params (gyroflow src/cli.rs).
+        // Echtes JSON mit doppelten Anführungszeichen; als einzelnes Process-Argument, keine Shell.
+        if store.gyroMatchSource, let json = await Self.outputParams(for: clip) {
+            args += ["-p", json]
         }
         p.arguments = args
         p.standardInput = FileHandle.nullDevice   // keine Rückfragen – nichts kann auf Eingabe warten

@@ -1097,8 +1097,8 @@ struct SettingsView: View {
                     }
                     GyroPresetBox()
                     GyroNotifyBlock()
-                    WithHelp(title: "Seitenverhältnis beibehalten", text: "An (empfohlen): Clips, die nicht 16:9 bzw. 9:16 sind – z. B. die DJI Avata mit 4:3 –, werden von Gyroflow nur stabilisiert und behalten ihr Originalformat. CamSort gibt Gyroflow dafür die Bildgröße des Clips als Ausgabegröße mit (statt der Größe aus deinem Preset). Dein Preset selbst bleibt unverändert.\n\nAus: Alle Clips bekommen die Ausgabegröße aus dem Preset (z. B. 16:9) – 4:3-Clips werden dann beschnitten.") {
-                        Toggle("4:3-Clips (z. B. Avata) im Originalformat lassen", isOn: $store.gyroKeepAspect)
+                    WithHelp(title: "Ausgabe wie Eingabeclip", text: "Aus deinem Preset übernimmt CamSort nur Glättung und dynamisches Zoomen. Objektivprofil, Auflösung, Format, Bildrate, Codec und Ton richten sich nach jedem Clip.\n\nSo passt ein Preset für alle Kameras: Gyroflow wählt das Objektivprofil selbst aus den Metadaten, 4:3-, 1:1- und Hochkant-Clips behalten ihr Format, H.264 bleibt H.264, H.265 bleibt H.265, ProRes bleibt ProRes – mit etwa der Bitrate des Originals und mit Ton. Dein Preset selbst bleibt unverändert.\n\nAus: Gyroflow nutzt das Preset komplett (auch Objektiv, Größe und Export-Format daraus).") {
+                        Toggle("Ausgabe wie Eingabeclip (empfohlen)", isOn: $store.gyroMatchSource)
                     }
                     WithHelp(title: "Gyroflow-App", text: "CamSort sucht Gyroflow automatisch im Programme-Ordner. Nur falls Gyroflow woanders liegt, hier die Gyroflow-App auswählen.") {
                         HStack {
@@ -1158,7 +1158,7 @@ struct GyroPresetBox: View {
                 Text(ok ? "Preset gespeichert: " + (store.gyroPresetPath as NSString).lastPathComponent : "Noch kein Gyroflow-Preset hinterlegt")
                     .font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Spacer()
-                HelpButton(title: "Gyroflow-Preset", text: "Das Preset ist eine kleine Datei (Endung .gyroflow), in der deine gewohnten Gyroflow-Einstellungen stehen – Objektivprofil, Glättung, Export-Format. CamSort gibt sie beim Stabilisieren an Gyroflow weiter, damit alles genauso gerendert wird wie bei dir von Hand. An deinen Einstellungen in Gyroflow ändert sich nichts.")
+                HelpButton(title: "Gyroflow-Preset", text: "Das Preset ist eine kleine Datei (Endung .gyroflow), in der deine gewohnten Gyroflow-Einstellungen stehen. Bei „Ausgabe wie Eingabeclip“ (Standard) übernimmt CamSort daraus nur Glättung und dynamisches Zoomen – Objektivprofil, Auflösung, Bildrate, Codec und Ton richten sich nach jedem Clip. An deinen Einstellungen in Gyroflow und an der Preset-Datei ändert sich nichts.")
             }
             HStack {
                 Button(ok ? "Anderes Preset wählen …" : "Preset-Datei wählen …") { choose() }
