@@ -86,6 +86,8 @@ final class TimelineModel: ObservableObject {
             while j > 0 && c[j].components(separatedBy: FolderNames.separator).allSatisfy({ extra.contains($0) || FolderNames.isFpsFolder($0) || $0.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil }) { j -= 1 }
             return c[j]
         }
+        // Clip direkt im Projektordner: Projektname ist keine Kamera
+        if FileManager.default.fileExists(atPath: u.deletingLastPathComponent().appendingPathComponent(Sorter.projectMarker).path) { return "Kamera" }
         return u.deletingLastPathComponent().lastPathComponent
     }
 

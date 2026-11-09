@@ -155,6 +155,10 @@ final class LearnedStore: ObservableObject {
     /// Rückfrage Bildrate: "ask" (nur fragen, wenn mehrere Bildraten vorkommen) oder "off" (nie fragen). „Immer“ = Ebene im Baukasten aktiv.
     @Published var fpsMode: String { didSet { d.set(fpsMode, forKey: "fpsMode") } }
     @Published var sceneGapMinutes: Double { didSet { d.set(sceneGapMinutes, forKey: "sceneGapMinutes") } }
+    /// Projekte trennen bei auffällig langer Drehpause: "ask" (Vorschlag mit Rückfrage), "always" (immer trennen), "never"
+    @Published var projectMode: String { didSet { d.set(projectMode, forKey: "projectMode") } }
+    /// Mindestpause in Minuten, ab der eine Projektgrenze vorgeschlagen wird (30 Min – 12 Std)
+    @Published var projectGapMinutes: Double { didSet { d.set(projectGapMinutes, forKey: "projectGapMinutes") } }
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
     var gyroSuffixList: [String] {
@@ -174,6 +178,8 @@ final class LearnedStore: ObservableObject {
         autoGyro = d.object(forKey: "autoGyro") as? Bool ?? true
         groupByScene = d.object(forKey: "groupByScene") as? Bool ?? true
         sceneGapMinutes = d.object(forKey: "sceneGapMinutes") as? Double ?? 5
+        projectMode = d.string(forKey: "projectMode") ?? "ask"
+        projectGapMinutes = min(720, max(30, d.object(forKey: "projectGapMinutes") as? Double ?? 90))
         nestLevels = d.object(forKey: "nestLevels") as? Bool ?? false
         lengthThreshold = d.object(forKey: "lengthThreshold") as? Double ?? 30
         lengthShort = d.string(forKey: "lengthShort") ?? "Einblendungen"

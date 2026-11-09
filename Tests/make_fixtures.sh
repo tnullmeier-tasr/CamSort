@@ -62,6 +62,11 @@ $FF -f lavfi -i testsrc=size=960x960:rate=25 -t 2 -pix_fmt yuv420p "$X/Q0001.MP4
 $FF -f lavfi -i testsrc=size=1280x720:rate=25 -t 2 -r 25 -pix_fmt yuv420p "$X/F25.MP4"
 $FF -f lavfi -i testsrc=size=1280x720:rate=50 -t 2 -r 50 -pix_fmt yuv420p "$X/F50.MP4"
 $FF -f lavfi -i testsrc=size=1280x720:rate=24000/1001 -t 2 -r 24000/1001 -pix_fmt yuv420p "$X/F24.MP4"
+# Projekte-Test: Aufnahmezeiten 10:00 und 15:00 (lange Pause), Nachzügler 15:30
+for t in "P1000 2026-11-08T10:00:00Z" "P1001 2026-11-08T10:20:00Z" "P1500 2026-11-08T15:00:00Z" "P1530 2026-11-08T15:30:00Z"; do
+  set -- $t
+  $FF -f lavfi -i testsrc=size=1280x720:rate=25 -t 2 -pix_fmt yuv420p -metadata creation_time=$2 "$X/$1.MP4"
+done
 # Fotos, Musik, ZIP, unbekannter Typ
 $FF -f lavfi -i testsrc=size=800x600 -frames:v 1 "$D/IMG_0002.JPG"
 $FF -f lavfi -i sine=frequency=440:duration=2 "$D/Musik_Intro.mp3"

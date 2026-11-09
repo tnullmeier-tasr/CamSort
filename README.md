@@ -53,6 +53,16 @@ CamSort fragt nur, wenn es für den Ordner wirklich relevant ist – jede Frage 
 - **Mehrere Aufnahmetage?** → *Tagesordner oben* (`Dreh/2026-10-12/A1/Hochkant`), *unter der Kamera* (`Dreh/A1/2026-10-12/Hochkant`) oder *Nein*. Datum aus den Video-Metadaten, Format einstellbar (Standard `JJJJ-MM-TT`), optional zählen Aufnahmen bis 4 Uhr zum Vortag. Gibt es schon Tagesordner, wird die Struktur ohne Frage weitergeführt. Auch als Baukasten-Ebene *Aufnahmetag*.
 - **Datum in den Ordnernamen?** (nach erfolgreichem Sortieren, nur wenn noch kein Datum im Namen steht): `Pitbike` → `2026-10-12 Pitbike` bzw. `2026-10-12–15 Pitbike`, vorne oder hinten. Nur der Ordner wird umbenannt. Gibt es den Namen schon, ist es eine Karte/Volume-Wurzel oder ein direkt gewählter Kameraordner, bleibt der Name.
 
+## Projekte trennen (lange Drehpause)
+Liegt zwischen den Clips (alle Kameras gemeinsam, Zeitintervalle Start–Ende gemergt) eine **auffällig lange Pause**, schlägt CamSort als erste Rückfrage vor, die Dateien in mehrere Projekte zu trennen – z. B. „Zwischen 11:58 und 15:04 liegt eine Pause von 3 Std. 6 Min.“ mit Übersicht je Projekt (Zeitraum, Clips je Kamera). Auffällig = mindestens die Mindestpause (Einstellung, Standard 90 Min., 30 Min.–12 Std.) **und** bei mind. 4 Lücken mindestens 4× der Median-Pause des Drehs. Kurze Pausen (10–20 Min.) lösen nie eine Frage aus; über Mitternacht ohne lange Pause bleibt es ein Projekt.
+
+- **Ja, getrennt ablegen**: Namensfelder je Projekt, vorbelegt mit Datum + Tageszeit (`2026-11-08 Vormittag`). Ablage als Unterordner **im** eingeworfenen Ordner (`Pitbike/2026-11-08 Nachmittag/Videos/…`, Modus Kameraordner: `Pitbike/<Projekt>/A1/Hochkant`); die relative Lage (Kameraordner, Kartenstruktur) bleibt erhalten, leer gewordene Ordner werden entfernt. Gibt es den Ordner schon, wird er weiterverwendet.
+- Fotos → Projekt ihres Aufnahmedatums (EXIF), Begleitdateien folgen ihrem Clip, Dateien ohne Datum → erstes Projekt (Hinweis).
+- **Falsche Kamerauhr**: Liegt eine Kamera ganz allein in einem Zeitblock, zeigt die Frage einen Hinweis und die Option, sie dem Projekt mit den meisten Clips zuzuordnen.
+- Datum: Tagesordner-Frage nur, wenn innerhalb eines Projekts mehrere Tage vorkommen. Steht im Projektnamen ein Datum, entfällt das Umbenennen; der Elternordner wird nicht umbenannt.
+- Erneutes Einlesen: Projektordner tragen eine unsichtbare Datei `.camsort-projekt` (Name, Zeitraum). Neue Clips, die zeitlich passen, landen ohne Frage im Projekt; sonst wird erneut gefragt. Bereits sortierte Drehs ohne Projektordner werden nicht umgebaut.
+- Einstellung: Fragen / Immer trennen (fragt trotzdem bei Verdacht auf falsche Kamerauhr) / Nie. „Antwort merken“ setzt Immer bzw. Nie.
+
 ## Bildrate (FPS)
 Optionale Ebene *Bildrate (FPS)* im Ordner-Baukasten (kompakt und „Meine Kameraordner“, z. B. `Dreh/A1/50 fps/Hochkant`).
 - **Rückfrage:** Nur wenn die neuen Clips mindestens zwei Bildraten haben: „Auch nach Bildrate sortieren?“ (*Ja, unter der Kamera* / *Nein*, „Antwort merken“). *Ja* ohne Merken gilt nur für diesen Lauf; gemerktes *Ja* aktiviert die Ebene dauerhaft, gemerktes *Nein* stellt die Frage auf *Nie* (Einstellungen › Nach Bildrate fragen). Gibt es schon FPS-Ordner, wird die Struktur ohne Frage weitergeführt.

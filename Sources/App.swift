@@ -523,6 +523,26 @@ struct DoneView: View {
 
                     CountGrid(hideZeros: true)
 
+                    if !sorter.projectSummaries.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(sorter.projectSummaries) { p in
+                                HStack(alignment: .top) {
+                                    Image(systemName: p.isNew ? "folder.fill.badge.plus" : "folder.fill").foregroundStyle(p.isNew ? Theme.mint : .white.opacity(0.6))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(p.name).lineLimit(1).truncationMode(.middle)
+                                        Text([p.range, p.cams].filter { !$0.isEmpty }.joined(separator: " · "))
+                                            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                                    }
+                                    Spacer()
+                                }
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
+                                .onTapGesture(count: 2) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p.path)]) }
+                            }
+                        }
+                    }
+
                     if !sorter.folderStats.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(sorter.folderStats) { st in
@@ -821,6 +841,7 @@ struct QuestionSheet: View {
     let request: QuestionRequest
     @State private var choice: String = ""
     @State private var remember = false
+    @State private var values: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -845,15 +866,34 @@ struct QuestionSheet: View {
                     }.buttonStyle(.plain)
                 }
             }
+            let shownFields = request.fields.filter { choice.hasPrefix($0.showFor) }
+            if !shownFields.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(shownFields) { f in
+                        HStack {
+                            Text(f.label).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                            TextField(f.value, text: Binding(get: { values[f.id] ?? f.value }, set: { values[f.id] = $0 }))
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+                }
+            }
             Toggle("Antwort merken (in den Einstellungen änderbar)", isOn: $remember).font(.system(size: 12))
             HStack {
                 Button("Abbrechen") { sorter.answerQuestion(nil, remember: false); sorter.cancel() }
                 Spacer()
-                Button("Weiter") { sorter.answerQuestion(choice.isEmpty ? (request.options.first?.id ?? "off") : choice, remember: remember) }
+                Button("Weiter") {
+                    var v: [String: String] = [:]
+                    for f in request.fields {
+                        let t = (values[f.id] ?? f.value).trimmingCharacters(in: .whitespacesAndNewlines)
+                        v[f.id] = t.isEmpty ? f.value : t
+                    }
+                    sorter.answerQuestion(choice.isEmpty ? (request.options.first?.id ?? "off") : choice, remember: remember, fields: v)
+                }
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20).frame(width: 440)
+        .padding(20).frame(width: request.fields.isEmpty ? 440 : 520)
         .onAppear { if choice.isEmpty { choice = request.options.first?.id ?? "" } }
     }
 }
@@ -973,6 +1013,15 @@ struct SettingsView: View {
                     section("Sortieren")
                     WithHelp(title: "Meine Kameraordner", text: "Für deinen Ablauf: Du legst beim Heimkommen selbst einen Ordner pro Kamera an (z. B. „A1“, „Mini-Drohne“, „Avata“) und kopierst die Karten hinein.\n\nAn: CamSort übernimmt deine Ordner als Kamera – es erkennt, fragt und benennt keine Kamera. In jedem Kameraordner sortiert es nur nach Hochkant und Quer, auch aus Kartenstrukturen wie PRIVATE/M4ROOT/CLIP oder DCIM. Begleitdateien (XML, SRT, LRF …) kommen in „Begleitdateien“, Fotos in „Fotos“, Musik/ZIP/FCP in „Extras“ – alles innerhalb des Kameraordners.\n\nWähle den Dreh-Ordner mit den Kameraordnern oder direkt einen Kameraordner. Lose Dateien im Dreh-Ordner bleiben liegen. Mehrfaches Einlesen ist sicher: Fertig sortierte Kameraordner bleiben unverändert, nur Neues wird einsortiert.\n\nAus: CamSort erkennt die Kamera selbst (bisheriges Verhalten).") {
                         Toggle("Meine Kameraordner (nur Hochkant / Quer)", isOn: $store.ownCameraFolders)
+                    }
+                    WithHelp(title: "Projekte trennen", text: "Liegt zwischen den Clips eine auffällig lange Pause (z. B. Vormittag ein Auftrag, Nachmittag ein zweiter), schlägt CamSort vor, die Dateien in zwei Projekte zu trennen – das ist nur ein Vorschlag, CamSort fragt immer nach. Auffällig heißt: mindestens so lang wie die Mindestpause UND deutlich länger als die üblichen Pausen dieses Drehs (mind. 4× der typischen Pause). Regelmäßige Pausen eines Drehs lösen also keine Frage aus. Über Mitternacht ohne lange Pause bleibt es ein Projekt.\n\nGetrennt wird in Unterordner IM eingeworfenen Ordner: Pitbike/2026-11-08 Vormittag/…, Pitbike/2026-11-08 Nachmittag/… – darin die gewohnte Struktur (Videos/… bzw. A1/Hochkant). Die Namen kannst du in der Frage ändern. Steht im Projektnamen ein Datum, wird der Ordner nicht mehr umbenannt. Fotos kommen ins Projekt ihres Aufnahmedatums, Begleitdateien zu ihrem Clip.\n\nLiegt eine Kamera ganz allein in einem Zeitblock, ist vielleicht ihre Uhr falsch gestellt – CamSort weist darauf hin und bietet an, sie dem Hauptprojekt zuzuordnen.\n\nBeim erneuten Einlesen erkennt CamSort die Projektordner (unsichtbare Datei .camsort-projekt): Neue Clips, die zeitlich passen, landen ohne Frage im passenden Projekt.\n\nFragen: Vorschlag mit Rückfrage. Immer trennen: ohne Frage (außer bei Verdacht auf falsche Kamerauhr). Nie: nie trennen.") {
+                        Picker("Projekte trennen", selection: $store.projectMode) {
+                            Text("Fragen").tag("ask"); Text("Immer trennen").tag("always"); Text("Nie").tag("never")
+                        }.frame(width: 300)
+                    }
+                    if store.projectMode != "never" {
+                        Stepper("Pause für neues Projekt: mind. \(Sorter.durationText(store.projectGapMinutes * 60))", value: $store.projectGapMinutes, in: 30...720, step: 30)
+                            .font(.system(size: 12))
                     }
                     WithHelp(title: "Tagesordner", text: "Stammen die Clips von mehreren Tagen, kann CamSort zusätzlich nach Aufnahmetag ordnen – oben (Dreh/2026-10-12/A1/Hochkant) oder unter der Kamera (Dreh/A1/2026-10-12/Hochkant). „Fragen“: CamSort fragt nur, wenn wirklich mehrere Tage drin sind. Gibt es schon Tagesordner, wird die vorhandene Struktur ohne Frage weitergeführt.\n\nDas Datum kommt aus den Video-Metadaten (Aufnahmezeit), nicht aus dem Dateidatum.") {
                         Picker("Tagesordner", selection: $store.dateMode) {

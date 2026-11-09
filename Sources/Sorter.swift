@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import AppKit
+import ImageIO
 
 // MARK: - Rückfragen
 
@@ -47,15 +48,25 @@ struct QuestionOption: Identifiable, Hashable {
     let detail: String
 }
 
+/// Optionales Textfeld in einer Rückfrage (z. B. Projektname). Wird nur bei Optionen angezeigt, deren id mit `showFor` beginnt.
+struct QuestionField: Identifiable, Hashable {
+    let id: String
+    let label: String
+    let value: String
+    var showFor: String = ""
+}
+
 final class QuestionRequest: Identifiable {
     let id = UUID()
     let title: String
     let message: String
     let icon: String
     let options: [QuestionOption]
+    let fields: [QuestionField]
     let continuation: CheckedContinuation<(String, Bool)?, Never>
-    init(title: String, message: String, icon: String, options: [QuestionOption], continuation: CheckedContinuation<(String, Bool)?, Never>) {
-        self.title = title; self.message = message; self.icon = icon; self.options = options; self.continuation = continuation
+    init(title: String, message: String, icon: String, options: [QuestionOption], fields: [QuestionField] = [],
+         continuation: CheckedContinuation<(String, Bool)?, Never>) {
+        self.title = title; self.message = message; self.icon = icon; self.options = options; self.fields = fields; self.continuation = continuation
     }
 }
 
@@ -69,6 +80,8 @@ struct PreRunQuestion {
     let options: [QuestionOption]
     let preset: String?
     let remember: (String) -> Void
+    /// Optionale Textfelder; Antworten landen in resolve() unter "<key>.<feld-id>"
+    var fields: [QuestionField] = []
 }
 
 enum Phase { case idle, scanning, sorting, done, cancelled }
@@ -120,6 +133,12 @@ final class Sorter: ObservableObject {
     /// Clips mit Gyrodaten nach dem Sortieren (Angebot im Fertig-Bildschirm)
     @Published var gyroOffer: [URL] = []
     @Published var gyroOfferByCamera: [String: Int] = [:]
+    /// Projekte (bei langer Drehpause getrennt) – Zusammenfassung für den Fertig-Bildschirm
+    @Published var projectSummaries: [ProjectSummary] = []
+    /// In diesem Lauf wird nach Projektordnern gearbeitet (Datumsfrage dann je Projekt)
+    var projectRoots: [URL] = []
+    /// Textfeld-Antworten der zuletzt beantworteten Rückfrage
+    var lastFieldAnswers: [String: String] = [:]
 
     let store: LearnedStore
 
@@ -168,7 +187,7 @@ final class Sorter: ObservableObject {
 
     private func clearResults() {
         counts = [:]; sideCounts = [:]; cameras = [:]; lenses = [:]; speeds = [:]; skipped = 0; ignored = 0
-        problems = []; hints = []; movedVideos = 0; folderStats = []; gyroOffer = []; gyroOfferByCamera = [:]; drehStarts = [:]; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
+        problems = []; hints = []; movedVideos = 0; folderStats = []; gyroOffer = []; gyroOfferByCamera = [:]; drehStarts = [:]; projectSummaries = []; projectRoots = []; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
     }
 
     func start() {
@@ -177,6 +196,8 @@ final class Sorter: ObservableObject {
         clearResults(); processed = 0
         phase = .scanning
         task = Task {
+            stepLabel = "Projekte prüfen …"
+            guard await splitProjects() else { phase = .cancelled; stepLabel = ""; return }
             stepLabel = store.ownCameraFolders ? "Meine Kameraordner: Hochkant / Quer"
                       : alreadySorted ? "Ordner schon sortiert – suche neue Dateien" : "Schritt 1: Sortieren"
             if store.ownCameraFolders { await runOwnCameraFolders() } else { await run() }
@@ -272,9 +293,10 @@ final class Sorter: ObservableObject {
         if let p = pendingQuestion { pendingQuestion = nil; p.continuation.resume(returning: nil) }
     }
 
-    func answerQuestion(_ option: String?, remember: Bool) {
+    func answerQuestion(_ option: String?, remember: Bool, fields: [String: String] = [:]) {
         guard let p = pendingQuestion else { return }
         pendingQuestion = nil
+        lastFieldAnswers = fields
         p.continuation.resume(returning: option.map { ($0, remember) })
     }
 
@@ -283,13 +305,16 @@ final class Sorter: ObservableObject {
         var out: [String: String] = [:]
         for q in questions {
             if let p = q.preset { out[q.key] = p; continue }
+            lastFieldAnswers = [:]
             let a: (String, Bool)? = await withCheckedContinuation { c in
-                pendingQuestion = QuestionRequest(title: q.title, message: q.message, icon: q.icon, options: q.options, continuation: c)
+                pendingQuestion = QuestionRequest(title: q.title, message: q.message, icon: q.icon, options: q.options,
+                                                  fields: q.fields, continuation: c)
             }
             guard let a, !Task.isCancelled else { return nil }
-            let (opt, rem) = a
+            let opt = a.0, rem = a.1
             if rem { q.remember(opt) }
             out[q.key] = opt
+            for f in q.fields { out[q.key + "." + f.id] = lastFieldAnswers[f.id] ?? f.value }
         }
         return out
     }
@@ -574,7 +599,8 @@ final class Sorter: ObservableObject {
         let cardish = cardMarkers.union(["MISC", "AVF_INFO", "THMBNL", "SUB", "GENERAL"])
         let hasCard = inside.contains { cardish.contains($0.uppercased()) }
         let onlyCardOrOutput = inside.allSatisfy { cardish.contains($0.uppercased()) || fixedOutput.contains($0) }
-        if hasCard && onlyCardOrOutput { root = root.deletingLastPathComponent() }
+        let isProject = FileManager.default.fileExists(atPath: root.appendingPathComponent(projectMarker).path)
+        if hasCard && onlyCardOrOutput && !isProject { root = root.deletingLastPathComponent() }
         return root
     }
 
@@ -631,7 +657,7 @@ final class Sorter: ObservableObject {
             let hasNew = infos.contains { !$0.job.dir.pathComponents.contains(where: FolderNames.isVideos) }
             let day = store.dayString(Date())
             var choice: String? = existing
-            if existing == nil && hasNew,
+            if existing == nil && hasNew && projectsNeedDate(infos.map { ($0.job.url, $0.start) }),
                let q = dateQuestion(starts: infos.map(\.start), existing: nil,
                                     example: ("\(FolderNames.videos)/\(day)/Kamera/…", "\(FolderNames.videos)/Kamera/\(day)/…")) {
                 guard let a = await resolve([q]) else { return false }
@@ -1412,6 +1438,7 @@ extension Sorter {
         else if ownCams.contains(where: { existingDateLayout($0.url) == "top" }) { existing = "under" }
         var dateChoice = "off"
         if store.levels.contains("date") { dateChoice = existing ?? "under" }
+        else if !projectsNeedDate(infos.map { ($0.v.url, $0.start) }) { dateChoice = "off" }
         else if let q = dateQuestion(starts: infos.map(\.start), existing: existing,
                                      example: ("Dreh/\(store.dayString(Date()))/A1/Hochkant", "Dreh/A1/\(store.dayString(Date()))/Hochkant")) {
             guard let a = await resolve([q]) else { phase = .cancelled; return }
@@ -1551,5 +1578,416 @@ extension Sorter {
             by[name, default: 0] += 1
         }
         gyroOfferByCamera = by
+    }
+}
+
+// MARK: - Projekte trennen (lange Drehpause)
+
+/// Ein Projekt im Fertig-Bildschirm
+struct ProjectSummary: Identifiable, Hashable {
+    var id: String { path }
+    let path: String
+    let name: String
+    let range: String
+    let cams: String
+    let isNew: Bool
+}
+
+/// Inhalt der unsichtbaren Markierungsdatei `.camsort-projekt` im Projektordner
+struct ProjectMarker: Codable {
+    var name: String
+    var start: Date
+    var end: Date
+}
+
+extension Sorter {
+    nonisolated static let projectMarker = ".camsort-projekt"
+
+    fileprivate struct PClip { let url: URL; let start: Date; let end: Date; let cam: String }
+    fileprivate struct PFile { let url: URL; let date: Date? }
+    fileprivate final class PProject {
+        let url: URL
+        var name: String
+        var start: Date
+        var end: Date
+        let existing: Bool
+        var clips: [PClip] = []
+        var files: [URL] = []
+        init(url: URL, name: String, start: Date, end: Date, existing: Bool) {
+            self.url = url; self.name = name; self.start = start; self.end = end; self.existing = existing
+        }
+        func distance(to d: Date) -> TimeInterval {
+            if d < start { return start.timeIntervalSince(d) }
+            if d > end { return d.timeIntervalSince(end) }
+            return 0
+        }
+    }
+
+    /// Datumsfrage nur, wenn innerhalb EINES Projekts (bzw. gewählten Ordners) mehrere Tage vorkommen.
+    func projectsNeedDate(_ items: [(URL, Date)]) -> Bool {
+        guard !projectRoots.isEmpty else { return true }
+        var days: [String: Set<String>] = [:]
+        for (u, d) in items {
+            let p = u.standardizedFileURL.path
+            let root = projectRoots.map { $0.standardizedFileURL.path }.filter { p.hasPrefix($0 + "/") }.max { $0.count < $1.count } ?? ""
+            days[root, default: []].insert(store.dayString(d))
+        }
+        return days.values.contains { $0.count > 1 }
+    }
+
+    static func readMarker(_ dir: URL) -> ProjectMarker? {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent(projectMarker)) else { return nil }
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        return try? dec.decode(ProjectMarker.self, from: data)
+    }
+
+    private func writeMarker(_ m: ProjectMarker, in dir: URL) {
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601; enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? enc.encode(m) else { return }
+        do { try data.write(to: dir.appendingPathComponent(Self.projectMarker), options: .atomic) }
+        catch { hints.append("\(dir.lastPathComponent): Projekt-Markierung konnte nicht gespeichert werden – beim nächsten Einlesen wird evtl. erneut gefragt") }
+    }
+
+    /// Aufnahmezeit inkl. Ende (Start + Dauer)
+    private func clipTime(_ url: URL) async -> (start: Date, end: Date) {
+        let r = await recordingTime(AVURLAsset(url: url), url: url)
+        return (start: r.0, end: r.1)
+    }
+
+    /// Aufnahmedatum eines Fotos: EXIF DateTimeOriginal (Ortszeit der Kamera), sonst Dateidatum
+    private func photoDate(_ url: URL) -> Date? {
+        if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+           let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any],
+           let s = exif[kCGImagePropertyExifDateTimeOriginal] as? String {
+            let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = .current
+            f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+            if let d = f.date(from: s) { return d }
+        }
+        let rv = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+        return rv?.contentModificationDate ?? rv?.creationDate
+    }
+
+    /// Kamera-Name nur für die Übersicht (ohne Rückfrage)
+    private func quickCamera(_ url: URL, base: URL, selfCam: Bool) async -> String {
+        if store.ownCameraFolders {
+            if selfCam { return base.lastPathComponent }
+            let rel = url.standardizedFileURL.pathComponents.dropFirst(base.standardizedFileURL.pathComponents.count)
+            return rel.count > 1 ? rel.first! : "lose Dateien"
+        }
+        let sib = Set((try? fm.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)) ?? [])
+        let det = await detect(url: url, asset: AVURLAsset(url: url), siblings: sib)
+        if let l = store.camera(for: det.signature) { return l.hasPrefix(LearnedStore.folderPrefix) ? String(l.dropFirst(LearnedStore.folderPrefix.count)) : l }
+        return det.name ?? "Kamera „\(LearnedStore.prefix(of: url.lastPathComponent))“"
+    }
+
+    static func durationText(_ s: TimeInterval) -> String {
+        let m = Int((s / 60).rounded())
+        if m < 60 { return "\(m) Min." }
+        let h = m / 60, r = m % 60
+        if h >= 48 { return "\(h / 24) Tagen" }
+        return r == 0 ? "\(h) Std." : "\(h) Std. \(r) Min."
+    }
+
+    /// Clips chronologisch zu Zeitblöcken zusammenführen (parallele Kameras überlappen) und Projektgrenzen bestimmen:
+    /// Lücke ≥ Mindestpause UND (bei mind. 4 Lücken) ≥ 4 × Median der Lücken dieses Drehs.
+    private func groupByPause(_ clips: [PClip]) -> [[PClip]] {
+        let sorted = clips.sorted { $0.start < $1.start }
+        guard !sorted.isEmpty else { return [] }
+        var blocks: [[PClip]] = [[sorted[0]]]
+        var blockEnd = sorted[0].end
+        var gaps: [TimeInterval] = []
+        for c in sorted.dropFirst() {
+            if c.start <= blockEnd { blocks[blocks.count - 1].append(c) }
+            else { gaps.append(c.start.timeIntervalSince(blockEnd)); blocks.append([c]) }
+            blockEnd = max(blockEnd, c.end)
+        }
+        let minGap = min(720, max(30, store.projectGapMinutes)) * 60
+        var limit = minGap
+        if gaps.count >= 4 {
+            let g = gaps.sorted()
+            let median = g.count % 2 == 1 ? g[g.count / 2] : (g[g.count / 2 - 1] + g[g.count / 2]) / 2
+            limit = max(minGap, 4 * median)
+        }
+        var out: [[PClip]] = [blocks[0]]
+        for (i, b) in blocks.enumerated().dropFirst() {
+            if gaps[i - 1] >= limit { out.append(b) } else { out[out.count - 1] += b }
+        }
+        return out
+    }
+
+    /// Vor dem Sortieren: je gewähltem Ordner prüfen, ob die Clips aus mehreren Projekten stammen. false = abgebrochen.
+    /// Bei Trennung werden `folders` durch die Projektordner ersetzt – der normale Ablauf sortiert dann jedes Projekt für sich.
+    func splitProjects() async -> Bool {
+        var out: [URL] = []
+        for base in folders {
+            if Task.isCancelled { return false }
+            guard let r = await planProjects(base) else { return false }
+            for u in r where !out.contains(where: { $0.standardizedFileURL.path == u.standardizedFileURL.path }) { out.append(u) }
+        }
+        if out != folders && !out.isEmpty { folders = out }
+        return true
+    }
+
+    private func planProjects(_ base: URL) async -> [URL]? {
+        if fm.fileExists(atPath: base.appendingPathComponent(Self.projectMarker).path) { projectRoots.append(base); return [base] }
+        // vorhandene Projektordner
+        let kids = ((try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? [])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        var projects: [PProject] = []
+        for k in kids where fm.fileExists(atPath: k.appendingPathComponent(Self.projectMarker).path) {
+            let m = Self.readMarker(k)
+            projects.append(PProject(url: k, name: m?.name ?? k.lastPathComponent, start: m?.start ?? .distantPast, end: m?.end ?? .distantPast, existing: true))
+        }
+        if store.projectMode == "never" && projects.isEmpty { return [base] }
+
+        // Unsortierte Dateien einsammeln (CamSort-Ausgabeordner und Projektordner nicht betreten)
+        var skip = Set(outputNames.map(FolderNames.fold))
+        for f in ["Stabilisiert", "Original", "Gyroflow-Projekte", "Musik", "ZIP", "FCP", "Sonstiges"] { skip.insert(FolderNames.fold(f)) }
+        if store.ownCameraFolders { for f in store.specialFolders { skip.insert(FolderNames.fold(f)) } }
+        let projectPaths = Set(projects.map { $0.url.standardizedFileURL.path })
+        var files: [URL] = []
+        var sortedPresent = false
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey, .isRegularFileKey]
+        var stack: [URL] = [base]
+        while let dir = stack.popLast() {
+            guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
+                if dir == base { return [base] }   // kein Zugriff → normaler Ablauf meldet das
+                continue
+            }
+            for u in items where !u.lastPathComponent.hasPrefix(".") {
+                let v = try? u.resourceValues(forKeys: Set(keys))
+                if v?.isSymbolicLink == true { continue }
+                let name = u.lastPathComponent
+                if v?.isDirectory == true {
+                    if Self.projectExt.contains(u.pathExtension.lowercased()) { files.append(u); continue }
+                    if v?.isPackage == true { continue }
+                    if projectPaths.contains(u.standardizedFileURL.path) { continue }
+                    if FolderNames.isVideos(name) || FolderNames.isOrientation(name) || FolderNames.hasFpsPart(name) { sortedPresent = true; continue }
+                    if skip.contains(FolderNames.fold(name)) { continue }
+                    if store.includeSubfolders || store.ownCameraFolders { stack.append(u) }
+                    continue
+                }
+                if v?.isRegularFile == true { files.append(u) }
+            }
+        }
+        // Bereits sortierter Dreh ohne Projektordner → nicht umbauen
+        if sortedPresent && projects.isEmpty { return [base] }
+
+        // Modus „Meine Kameraordner“ mit direkt gewähltem Kameraordner: Projekt/<Kamera>/…
+        var selfCam = false
+        if store.ownCameraFolders {
+            if let p = projects.first { selfCam = fm.fileExists(atPath: p.url.appendingPathComponent(base.lastPathComponent).path) }
+            else if let r = cameraFolders(in: base, skip: ownSkipNames()), r.cams.count == 1, r.cams[0].group == nil { selfCam = true }
+        }
+
+        // Clips (Videos außer Sony-Proxys/Vorschau) mit Aufnahmezeit
+        var clips: [PClip] = []
+        var others: [URL] = []
+        for u in files {
+            if Task.isCancelled { return nil }
+            let ext = u.pathExtension.lowercased()
+            let parent = u.deletingLastPathComponent()
+            let proxy = ["SUB", "THMBNL"].contains(parent.lastPathComponent.uppercased())
+                && parent.deletingLastPathComponent().lastPathComponent.uppercased() == "M4ROOT"
+            if category(for: ext) == .video && !proxy {
+                currentFile = u.lastPathComponent
+                let t = await clipTime(u)
+                let cam = await quickCamera(u, base: base, selfCam: selfCam)
+                clips.append(PClip(url: u, start: t.start, end: t.end, cam: cam))
+            } else if ext != "savedsearch" { others.append(u) }
+        }
+        currentFile = ""
+        if clips.isEmpty && projects.isEmpty { return [base] }
+        let minGap = min(720, max(30, store.projectGapMinutes)) * 60
+
+        // 1) Clips, die zeitlich zu einem vorhandenen Projekt passen, dorthin – ohne Frage
+        var rest: [PClip] = []
+        for c in clips {
+            if let p = projects.filter({ $0.distance(to: c.start) < minGap || $0.distance(to: c.end) < minGap })
+                .min(by: { $0.distance(to: c.start) < $1.distance(to: c.start) }) { p.clips.append(c) }
+            else { rest.append(c) }
+        }
+        var groups = groupByPause(rest)
+        if projects.isEmpty && groups.count <= 1 { return [base] }
+
+        let tf = DateFormatter(); tf.dateFormat = "HH:mm"; tf.timeZone = .current
+        let df = DateFormatter(); df.dateFormat = "dd.MM. HH:mm"; df.timeZone = .current
+        func range(_ a: Date, _ b: Date) -> String {
+            Calendar.current.isDate(a, inSameDayAs: b) ? "\(df.string(from: a))–\(tf.string(from: b))" : "\(df.string(from: a)) – \(df.string(from: b))"
+        }
+        func camList(_ cs: [PClip]) -> String {
+            var n: [String: Int] = [:]
+            for c in cs { n[c.cam, default: 0] += 1 }
+            return n.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+        }
+
+        // 2) Kamera mit falsch gestellter Uhr? Eine Kamera bildet allein einen Block, kommt sonst nirgends vor.
+        var suspect: (group: Int, cam: String, target: Int)? = nil
+        if groups.count + projects.count > 1 {
+            for (i, g) in groups.enumerated() {
+                let cams = Set(g.map(\.cam))
+                guard cams.count == 1, let cam = cams.first else { continue }
+                let elsewhere = groups.enumerated().contains { $0.offset != i && $0.element.contains { $0.cam == cam } }
+                    || projects.contains { p in p.clips.contains { $0.cam == cam } }
+                let othersHaveCams = groups.enumerated().contains { $0.offset != i && !$0.element.isEmpty } || !projects.isEmpty
+                guard !elsewhere && othersHaveCams, groups.count > 1 else { continue }
+                // Ziel: Block mit den meisten anderen Clips
+                let t = groups.indices.filter { $0 != i }.max { groups[$0].count < groups[$1].count }
+                if let t { suspect = (i, cam, t); break }
+            }
+        }
+
+        // 3) Rückfrage
+        var lines: [String] = []
+        for p in projects { lines.append("Vorhanden: \(p.name) (\(p.start == .distantPast ? "ohne Zeit" : range(p.start, p.end)))") }
+        var dflt: [String] = []
+        let partF = DateFormatter(); partF.dateFormat = "HH.mm"; partF.timeZone = .current
+        for g in groups {
+            let a = g.map(\.start).min()!, b = g.map(\.end).max()!
+            let h = Calendar.current.component(.hour, from: a)
+            dflt.append(Self.clean("\(store.dayString(a)) " + (h < 12 ? "Vormittag" : h < 17 ? "Nachmittag" : "Abend")))
+            lines.append("Projekt \(projects.count + dflt.count): \(range(a, b)) · \(camList(g))")
+        }
+        // gleiche Vorschläge unterscheidbar machen (Uhrzeit anhängen)
+        let orig = dflt
+        for i in dflt.indices where orig.filter({ $0 == orig[i] }).count > 1 || projects.contains(where: { $0.name == orig[i] }) {
+            dflt[i] += " " + partF.string(from: groups[i].map(\.start).min()!)
+        }
+        var pauses: [String] = []
+        var allBlocks: [(Date, Date)] = projects.filter { $0.start != .distantPast }.map { ($0.start, $0.end) }
+        for g in groups { allBlocks.append((g.map(\.start).min()!, g.map(\.end).max()!)) }
+        allBlocks.sort { $0.0 < $1.0 }
+        for i in allBlocks.indices.dropFirst() where allBlocks[i].0 > allBlocks[i - 1].1 {
+            let gap = allBlocks[i].0.timeIntervalSince(allBlocks[i - 1].1)
+            let sameDay = Calendar.current.isDate(allBlocks[i - 1].1, inSameDayAs: allBlocks[i].0)
+            let fa = sameDay ? tf.string(from: allBlocks[i - 1].1) : df.string(from: allBlocks[i - 1].1)
+            let fb = sameDay ? tf.string(from: allBlocks[i].0) : df.string(from: allBlocks[i].0)
+            if gap >= minGap { pauses.append("Zwischen \(fa) und \(fb) liegt eine Pause von \(Self.durationText(gap)).") }
+        }
+        var msg = (pauses.isEmpty ? "Neue Clips passen zeitlich zu keinem vorhandenen Projekt." : pauses.joined(separator: " "))
+        msg += "\n\n" + lines.joined(separator: "\n")
+        var opts = [QuestionOption(id: "split", label: "Ja, getrennt ablegen",
+                                   detail: "\(base.lastPathComponent)/<Projektname>/…")]
+        if let s = suspect {
+            let ga = groups[s.group].map(\.start).min()!, gt = groups[s.target].map(\.start).min()!
+            let far = abs(ga.timeIntervalSince(gt)) > 30 * 86400
+            msg += "\n\nAchtung: Kamera \(s.cam) liegt komplett separat\(far ? " (Aufnahmedatum \(store.dayString(ga)))" : "") – evtl. falsche Uhrzeit an der Kamera?"
+            opts.append(QuestionOption(id: "split-fix", label: "Ja, aber \(s.cam) zu Projekt \(projects.count + s.target + 1)",
+                                       detail: "\(s.cam) dem Projekt mit den meisten anderen Clips zuordnen"))
+        }
+        opts.append(QuestionOption(id: "one", label: projects.isEmpty ? "Nein, ein Projekt" : "Nein, zum nächstliegenden Projekt",
+                                   detail: projects.isEmpty ? "Alles bleibt zusammen in „\(base.lastPathComponent)“" : "Kein neuer Projektordner"))
+        let fields = dflt.enumerated().map { QuestionField(id: "name\($0.offset)", label: "Name Projekt \(projects.count + $0.offset + 1)", value: $0.element, showFor: "split") }
+        // „Immer trennen“ gemerkt: nur fragen, wenn eine Kamera verdächtig isoliert liegt
+        let preset: String? = store.projectMode == "always" && suspect == nil ? "split"
+                            : store.projectMode == "never" ? "one" : nil
+        let q = PreRunQuestion(key: "project", title: pauses.isEmpty ? "Neues Projekt?" : "Sind das \(groups.count + projects.count) Projekte?",
+                               message: msg, icon: "rectangle.split.3x1", options: opts, preset: preset,
+                               remember: { [weak self] a in self?.store.projectMode = a == "one" ? "never" : "always" },
+                               fields: fields)
+        var ans: [String: String] = ["project": "split"]
+        if !groups.isEmpty {
+            guard let a = await resolve([q]) else { return nil }
+            ans = a
+        }
+        var choice = ans["project"] ?? "one"
+        if choice == "split-fix", let s = suspect {
+            groups[s.target] += groups[s.group]
+            groups[s.group] = []
+            hints.append("Kamera \(s.cam) liegt zeitlich separat (Kamerauhr prüfen) – dem Projekt mit den meisten Clips zugeordnet")
+            choice = "split"
+        }
+        if choice != "split" {
+            if projects.isEmpty { return [base] }
+            for c in rest { projects.min { $0.distance(to: c.start) < $1.distance(to: c.start) }?.clips.append(c) }
+        } else {
+            var usedNames = Set<String>()
+            for (i, g) in groups.enumerated() where !g.isEmpty {
+                var name = Self.clean(ans["project.name\(i)"] ?? dflt[i])
+                if name.isEmpty || name.hasPrefix(".") { name = dflt[i] }
+                // Dublette innerhalb dieser Frage → Zähler anhängen
+                var n = 2
+                let stem = name
+                while usedNames.contains(FolderNames.fold(name)) { name = "\(stem) (\(n))"; n += 1 }
+                usedNames.insert(FolderNames.fold(name))
+                // Gibt es den Projektordner schon → als bestehendes Projekt weiterverwenden
+                if let old = projects.first(where: { FolderNames.fold($0.url.lastPathComponent) == FolderNames.fold(name) }) {
+                    old.clips += g; continue
+                }
+                var dir = base.appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                while fm.fileExists(atPath: dir.path, isDirectory: &isDir) && !isDir.boolValue {   // gleichnamige Datei
+                    dir = base.appendingPathComponent("\(stem) (\(n))"); n += 1
+                }
+                let p = PProject(url: dir, name: dir.lastPathComponent, start: g.map(\.start).min()!, end: g.map(\.end).max()!, existing: false)
+                p.clips = g
+                projects.append(p)
+            }
+        }
+        // Zeiträume aktualisieren
+        for p in projects where !p.clips.isEmpty {
+            let a = p.clips.map(\.start).min()!, b = p.clips.map(\.end).max()!
+            p.start = p.start == .distantPast ? a : min(p.start, a); p.end = p.end == .distantPast ? b : max(p.end, b)
+        }
+        guard !projects.isEmpty else { return [base] }
+
+        // 4) Andere Dateien: Begleitdatei folgt ihrem Clip (Dateiname beginnt mit dem Clipnamen), sonst nach Datum, sonst erstes Projekt
+        var byStem: [(stem: String, dir: String, p: PProject)] = []
+        for p in projects { for c in p.clips { byStem.append((c.url.deletingPathExtension().lastPathComponent, c.url.deletingLastPathComponent().path, p)) } }
+        var undated = 0
+        for f in others {
+            let stem = f.deletingPathExtension().lastPathComponent
+            let cands = byStem.filter { !$0.stem.isEmpty && stem.hasPrefix($0.stem) }
+            if let hit = cands.max(by: { ($0.dir == f.deletingLastPathComponent().path ? 1 : 0, $0.stem.count) < ($1.dir == f.deletingLastPathComponent().path ? 1 : 0, $1.stem.count) }) {
+                hit.p.files.append(f); continue
+            }
+            let isPhoto = category(for: f.pathExtension.lowercased()) == .photo
+            let d: Date? = isPhoto ? photoDate(f) : (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let d, let p = projects.min(by: { $0.distance(to: d) < $1.distance(to: d) }) { p.files.append(f) }
+            else { projects[0].files.append(f); undated += 1 }
+        }
+        if undated > 0 { hints.append("\(plural(undated, "Datei", "Dateien")) ohne Datum → \(projects[0].name)") }
+
+        // 5) Verschieben: relative Lage bleibt erhalten (<Eingeworfen>/<Projekt>/[Kamera]/…)
+        let basePath = base.standardizedFileURL.path
+        var touched = Set<URL>()
+        stepLabel = "Projekte anlegen …"
+        for p in projects {
+            let items = p.clips.map(\.url) + p.files
+            if !items.isEmpty || !p.existing { try? fm.createDirectory(at: p.url, withIntermediateDirectories: true) }
+            for u in items {
+                if Task.isCancelled { return nil }
+                let parent = u.deletingLastPathComponent().standardizedFileURL.path
+                guard parent == basePath || parent.hasPrefix(basePath + "/") else { continue }
+                var target = p.url
+                if selfCam { target = target.appendingPathComponent(base.lastPathComponent) }
+                let rel = String(parent.dropFirst(basePath.count)).split(separator: "/").map(String.init)
+                for r in rel { target = target.appendingPathComponent(r) }
+                currentFile = u.lastPathComponent
+                if await move(u, to: target) { touched.insert(u.deletingLastPathComponent()) }
+            }
+            writeMarker(ProjectMarker(name: p.name, start: p.start, end: p.end), in: p.url)
+        }
+        currentFile = ""
+        // leer gewordene Ordner (Kartenstruktur, Kameraordner) entfernen – nur wenn wirklich leer
+        for d in touched.sorted(by: { $0.path.count > $1.path.count }) {
+            var cur = d
+            while cur.standardizedFileURL.path.count > basePath.count && cur.standardizedFileURL.path.hasPrefix(basePath + "/") {
+                let items = ((try? fm.contentsOfDirectory(atPath: cur.path)) ?? ["x"]).filter { $0 != ".DS_Store" }
+                guard items.isEmpty else { break }
+                try? fm.removeItem(at: cur)
+                cur = cur.deletingLastPathComponent()
+            }
+        }
+        for p in projects {
+            let cams = camList(p.clips)
+            projectSummaries.append(ProjectSummary(path: p.url.path, name: p.url.lastPathComponent,
+                                                   range: p.start == .distantPast ? "" : range(p.start, p.end),
+                                                   cams: cams.isEmpty ? "keine neuen Clips" : cams, isNew: !p.existing))
+        }
+        let urls = projects.map(\.url)
+        projectRoots += urls
+        return urls
     }
 }

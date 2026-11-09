@@ -36,6 +36,7 @@ struct E2E {
         store.ownCameraFolders = false
         store.dateMode = "off"; store.renameMode = "off"   // Rückfragen nur im eigenen Test
         store.fpsMode = "off"                                // FPS-Rückfrage nur im eigenen Test
+        store.projectMode = "never"                          // Projekt-Rückfrage nur im eigenen Test
         let sorter = Sorter(store: store)
         let gyro = GyroRunner(store: store, sorter: sorter)
         let tagger = TagRunner()
@@ -628,6 +629,54 @@ struct E2E {
             check(Set(sorter.folderStats.map(\.name)) == ["A1", "B1"], "Kameraordner bleiben A1/B1")
             check(TimelineModel.camera(of: fdreh.appendingPathComponent("A1/50 fps/Quer/F50.MP4")) == "A1", "Zeitleiste: Kamera A1, nicht „50 fps“")
             store.ownCameraFolders = false; store.fpsMode = "off"
+        }
+
+        // 6b) Projekte trennen bei langer Drehpause
+        do {
+            let fmx = FileManager.default
+            let x = root.deletingLastPathComponent().appendingPathComponent("CamSort-Extra")
+            let pd = root.deletingLastPathComponent().appendingPathComponent("CamSort-Projekte")
+            try? fmx.removeItem(at: pd)
+            try? fmx.createDirectory(at: pd, withIntermediateDirectories: true)
+            for n in ["P1000", "P1001", "P1500"] { try? fmx.copyItem(at: x.appendingPathComponent("\(n).MP4"), to: pd.appendingPathComponent("C\(n.dropFirst()).MP4")) }
+            store.ownCameraFolders = false; store.compactLayout = true; store.projectMode = "ask"; store.projectGapMinutes = 90
+            store.dateMode = "off"; store.renameMode = "off"; store.fpsMode = "off"
+            var asked = 0
+            func runP() async {
+                sorter.reset(); sorter.addFolders([pd]); sorter.start()
+                let t0 = Date()
+                while sorter.phase != .done && sorter.phase != .cancelled && Date().timeIntervalSince(t0) < 120 {
+                    if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                    if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                    if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion.isEmpty ? "Kamera" : r.suggestion, remember: false) }
+                    if let q = sorter.pendingQuestion {
+                        if q.title.contains("Projekt") {
+                            asked += 1
+                            if asked == 1 { render(QuestionSheet(request: q), "22-rueckfrage-projekte", w: 520, h: 460, sheet: true) }
+                            sorter.answerQuestion("split", remember: false, fields: ["name0": "Auftrag A", "name1": "Auftrag B"])
+                        } else { sorter.answerQuestion("off", remember: false) }
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            func find(_ name: String) -> String? {
+                ((try? fmx.subpathsOfDirectory(atPath: pd.path)) ?? []).first { $0.hasSuffix("/" + name) }
+            }
+            await runP()
+            check(asked == 1, "Lange Pause (5 Std.) → Frage nach zwei Projekten")
+            check(fmx.fileExists(atPath: pd.appendingPathComponent("Auftrag A/\(Sorter.projectMarker)").path)
+                  && fmx.fileExists(atPath: pd.appendingPathComponent("Auftrag B/\(Sorter.projectMarker)").path), "Zwei Projektordner mit Markierung")
+            check(find("C1000.MP4")?.hasPrefix("Auftrag A/Videos") == true && find("C1001.MP4")?.hasPrefix("Auftrag A/Videos") == true
+                  && find("C1500.MP4")?.hasPrefix("Auftrag B/Videos") == true, "Clips im richtigen Projekt (\(find("C1500.MP4") ?? "-"))")
+            render(DoneView(), "23-fertig-projekte")
+            let tree1 = ((try? fmx.subpathsOfDirectory(atPath: pd.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            await runP()
+            let tree2 = ((try? fmx.subpathsOfDirectory(atPath: pd.path)) ?? []).filter { !$0.contains(".DS_Store") }.sorted()
+            check(asked == 1 && tree1 == tree2, "Zweiter Lauf: keine Frage, nichts verändert")
+            try? fmx.copyItem(at: x.appendingPathComponent("P1530.MP4"), to: pd.appendingPathComponent("C1530.MP4"))
+            await runP()
+            check(asked == 1 && find("C1530.MP4")?.hasPrefix("Auftrag B/") == true, "Neuer Clip 15:30 → Projekt B ohne Frage (\(find("C1530.MP4") ?? "-"))")
+            store.projectMode = "never"; store.compactLayout = false
         }
 
         // 7) Weitere Ansichten
