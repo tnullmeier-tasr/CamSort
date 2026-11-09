@@ -432,7 +432,7 @@ enum Safety {
         guard let v = try? u.resourceValues(forKeys: keys) else { return false }
         if v.volumeIsRootFileSystem == true { return false }
         if v.volumeIsRemovable == true { return true }
-        guard let root = v.volumeURL else { return false }
+        guard let root = v.volume else { return false }
         let fm = FileManager.default
         return fm.fileExists(atPath: root.appendingPathComponent("DCIM").path) || fm.fileExists(atPath: root.appendingPathComponent("PRIVATE").path)
     }
