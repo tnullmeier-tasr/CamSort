@@ -1293,14 +1293,8 @@ struct SettingsView: View {
                     WithHelp(title: "Ausgabe wie Eingabeclip", text: "Aus deinem Preset übernimmt CamSort nur Glättung und dynamisches Zoomen. Objektivprofil, Auflösung, Format, Framerate, Codec und Ton richten sich nach jedem Clip.\n\nSo passt ein Preset für alle Kameras: Gyroflow wählt das Objektivprofil selbst aus den Metadaten, 4:3-, 1:1- und Hochkant-Clips behalten ihr Format, H.264 bleibt H.264, H.265 bleibt H.265, ProRes bleibt ProRes – mit etwa der Bitrate des Originals und mit Ton. Dein Preset selbst bleibt unverändert.\n\nAus: Gyroflow nutzt das Preset komplett (auch Objektiv, Größe und Export-Format daraus).") {
                         Toggle("Ausgabe wie Eingabeclip (empfohlen)", isOn: $store.gyroMatchSource)
                     }
-                    WithHelp(title: "Tiefpass bei Drohnen", text: "Drohnen – besonders FPV wie die DJI Avata 2 – liefern durch die Motoren verrauschte Gyrodaten. Ist das an, schaltet CamSort für jeden Drohnen-Clip den Tiefpassfilter von Gyroflow ein (Gyroflow › Bewegungsdaten › Low pass filter), auch wenn dein Preset ihn nicht hat. Hat dein Preset schon einen Wert, bleibt dieser.\n\nDrohne erkennt CamSort an den DJI-Bewegungsdaten bzw. „DJI“ im Ordner-/Dateipfad zusammen mit Avata, FPV, Mini, Air, Mavic, Neo, Phantom, Inspire, Spark, Flip, M3P/M3E/M30 – oder einem Kameraordner namens „Drohne“/„Drone“/„FPV“/„Avata“. Osmo/Action/Pocket gelten als Bodenkamera, dort ändert sich nichts.\n\nWert: Gyroflow nennt 30–70 Hz als übliche Werte, Standard in Gyroflow 50 Hz. Niedriger = stärker gefiltert (bei starken Vibrationen), zu niedrig glättet echte Bewegung weg.") {
-                        HStack {
-                            Toggle("Tiefpass bei Drohnen", isOn: $store.gyroDroneLPF)
-                            Spacer()
-                            TextField("Hz", value: $store.gyroDroneLPFHz, format: .number).frame(width: 52).textFieldStyle(.roundedBorder)
-                                .disabled(!store.gyroDroneLPF)
-                            Text("Hz").font(.system(size: 12)).foregroundStyle(.secondary)
-                        }
+                    WithHelp(title: "FPV: kein Zoomen", text: "An (empfohlen): Bei Clips von FPV-Drohnen (DJI Avata, Avata 2, FPV) stellt CamSort in Gyroflow die Zoom-Methode auf „Kein Zoomen“ – auch wenn dein Preset dynamisches Zoomen nutzt. Alle anderen Kameras behalten die Einstellung aus deinem Preset.\n\nErkannt wird FPV am Kameraordner- oder Dateinamen (Avata, Avata 2, FPV). Osmo/Action/Pocket zählen nie dazu.") {
+                        Toggle("FPV-Drohnen (Avata): kein Zoomen", isOn: $store.gyroFPVNoZoom)
                     }
                     WithHelp(title: "Gyroflow-App", text: "CamSort sucht Gyroflow automatisch im Programme-Ordner. Nur falls Gyroflow woanders liegt, hier die Gyroflow-App auswählen.") {
                         HStack {

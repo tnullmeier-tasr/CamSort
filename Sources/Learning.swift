@@ -78,9 +78,8 @@ final class LearnedStore: ObservableObject {
     /// Gyroflow: aus dem Preset nur Glättung + dynamisches Zoomen übernehmen; Objektiv, Größe, Framerate, Codec, Bitrate, Ton pro Clip
     /// (ersetzt das frühere „gyroKeepAspect“). Aus = Preset komplett wie bisher.
     @Published var gyroMatchSource: Bool { didSet { d.set(gyroMatchSource, forKey: "gyroMatchSource") } }
-    /// Gyro-Tiefpassfilter für Drohnen-Clips immer an (Gyroflow gyro_source.lpf, Hz) – Standard an, 50 Hz
-    @Published var gyroDroneLPF: Bool { didSet { d.set(gyroDroneLPF, forKey: "gyroDroneLPF") } }
-    @Published var gyroDroneLPFHz: Double { didSet { d.set(gyroDroneLPFHz, forKey: "gyroDroneLPFHz") } }
+    /// FPV-Drohnen (Avata/FPV): in Gyroflow immer „Kein Zoomen“ – Standard an
+    @Published var gyroFPVNoZoom: Bool { didSet { d.set(gyroFPVNoZoom, forKey: "gyroFPVNoZoom") } }
     /// Tagesordner: "ask" (nur fragen, wenn mehrere Tage), "top" (Tag über der Kamera), "under" (Tag unter der Kamera), "off"
     @Published var dateMode: String { didSet { d.set(dateMode, forKey: "dateMode") } }
     /// Datumsformat für Tagesordner (DateFormatter), Standard JJJJ-MM-TT
@@ -202,8 +201,7 @@ final class LearnedStore: ObservableObject {
         }
         ownCameraFolders = d.object(forKey: "ownCameraFolders") as? Bool ?? false
         gyroMatchSource = d.object(forKey: "gyroMatchSource") as? Bool ?? true
-        gyroDroneLPF = d.object(forKey: "gyroDroneLPF") as? Bool ?? true
-        gyroDroneLPFHz = d.object(forKey: "gyroDroneLPFHz") as? Double ?? 50
+        gyroFPVNoZoom = d.object(forKey: "gyroFPVNoZoom") as? Bool ?? true
         dateMode = d.string(forKey: "dateMode") ?? "ask"
         fpsMode = d.string(forKey: "fpsMode") ?? "ask"
         dateFormat = d.string(forKey: "dateFormat") ?? "yyyy-MM-dd"
