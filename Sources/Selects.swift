@@ -235,7 +235,7 @@ enum FCPXML {
         guard let sb = out.copyNextSampleBuffer(), let bb = CMSampleBufferGetDataBuffer(sb) else { return 0 }
         var v: UInt32 = 0
         guard CMBlockBufferCopyDataBytes(bb, atOffset: 0, dataLength: 4, destination: &v) == noErr else { return 0 }
-        // Zeitcode-Bildnummer = Bilder in der Bildrate des Clips (NDF), passt direkt zu Final Cut
+        // Zeitcode-Bildnummer = Bilder in der Framerate des Clips (NDF), passt direkt zu Final Cut
         return Int(UInt32(bigEndian: v))
     }
 

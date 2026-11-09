@@ -149,6 +149,87 @@ struct ContentView: View {
                 QuestionSheet(request: req).environmentObject(sorter)
             }
         )
+        .background(
+            Color.clear.sheet(item: $sorter.undoResult) { info in
+                UndoResultSheet(info: info)
+            }
+        )
+        .onChange(of: sorter.importRequest) { _, url in
+            guard let url else { return }
+            sorter.importRequest = nil
+            importer.setSource(url)
+            importer.open()
+        }
+    }
+}
+
+// MARK: - Rückgängig
+
+struct UndoResultSheet: View {
+    let info: UndoResultInfo
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: info.report.skipped.isEmpty ? "arrow.uturn.backward.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 26)).foregroundStyle(info.report.skipped.isEmpty ? .green : .orange)
+                VStack(alignment: .leading) {
+                    Text(info.title).font(.headline)
+                    Text("\(plural(info.report.restored, "Datei ist", "Dateien sind")) zurück an ihrem ursprünglichen Platz, \(plural(info.report.removedDirs, "leerer Ordner", "leere Ordner")) entfernt.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+            if !info.report.skipped.isEmpty {
+                Text("Übersprungen (nichts überschrieben):").font(.system(size: 12, weight: .semibold))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(info.report.skipped.enumerated()), id: \.offset) { _, l in
+                            Text("• " + l).font(.system(size: 11)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }.frame(maxHeight: 200)
+            }
+            if !info.report.fcpLibraries.isEmpty {
+                Text("Final-Cut-Mediatheken: Clips liegen wieder am alten Ort – in Final Cut ggf. „Dateien neu verknüpfen“:").font(.system(size: 12, weight: .semibold))
+                ForEach(info.report.fcpLibraries, id: \.self) { u in
+                    Button(u.lastPathComponent) { NSWorkspace.shared.activateFileViewerSelecting([u]) }.buttonStyle(.link)
+                }
+            }
+            HStack { Spacer(); Button("Fertig") { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .padding(22).frame(width: 480)
+    }
+}
+
+/// Liste der Läufe, deren Protokoll im eingeworfenen Ordner liegt – Rückgängig nur für den jüngsten noch nicht rückgängig gemachten.
+struct FolderRunsView: View {
+    @EnvironmentObject var sorter: Sorter
+    let runs: [RunInfo]
+    @State private var confirm: RunInfo?
+
+    static let df: DateFormatter = { let f = DateFormatter(); f.dateFormat = "dd.MM.yyyy"; return f }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(runs) { r in
+                HStack(spacing: 6) {
+                    Image(systemName: r.undone ? "arrow.uturn.backward.circle" : "clock.arrow.circlepath").foregroundStyle(.white.opacity(0.6))
+                    Text("\(r.title.isEmpty ? "Sortiert" : r.title) am \(Self.df.string(from: r.date)) · \(plural(r.files, "Datei", "Dateien"))")
+                    if r.undone { Text("– rückgängig gemacht").foregroundStyle(.white.opacity(0.5)) }
+                    Spacer()
+                    if JournalStore.canUndo(r, among: runs) {
+                        Button("Rückgängig machen") { confirm = r }.buttonStyle(.link)
+                    }
+                }
+                .font(.system(size: 11))
+            }
+        }
+        .alert("Rückgängig machen?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), presenting: confirm) { r in
+            Button("Rückgängig machen") { sorter.undoFolderRun(r); confirm = nil }
+            Button("Abbrechen", role: .cancel) { confirm = nil }
+        } message: { r in
+            Text("\(plural(UndoEngine.preview(r.url), "Datei geht", "Dateien gehen")) zurück an ihren ursprünglichen Platz. Nichts wird überschrieben; was inzwischen woanders liegt oder dessen Platz belegt ist, wird übersprungen und aufgelistet.")
+        }
     }
 }
 
@@ -309,9 +390,12 @@ struct IdleView: View {
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .glassBackground(10)
                         .transition(.move(edge: .top).combined(with: .opacity))
+                        if let runs = sorter.folderRuns[f.path], !runs.isEmpty {
+                            FolderRunsView(runs: runs).padding(.horizontal, 14)
+                        }
                     }
                 }
-                .frame(maxHeight: 140)
+                .frame(maxHeight: 200)
             }
 
             HStack(spacing: 8) {
@@ -519,6 +603,7 @@ struct DoneView: View {
     @EnvironmentObject var store: LearnedStore
     @State private var pop = false
     @State private var showProblems = true
+    @State private var confirmUndo = false
 
     var cancelled: Bool { sorter.phase == .cancelled }
     var hasProblems: Bool { !sorter.problems.isEmpty }
@@ -677,6 +762,23 @@ struct DoneView: View {
                 }.buttonStyle(.plain)
             }
             .font(.system(size: 13, weight: .semibold, design: .rounded))
+
+            if sorter.lastJournal != nil && !sorter.lastJournalUndone {
+                Button { confirmUndo = true } label: {
+                    Label("Rückgängig machen", systemImage: "arrow.uturn.backward")
+                        .frame(maxWidth: .infinity).frame(height: 36)
+                        .glassBackground(12)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .help("Alles aus diesem Lauf zurück an den ursprünglichen Platz – nichts wird überschrieben")
+                .alert("Rückgängig machen?", isPresented: $confirmUndo) {
+                    Button("Rückgängig machen") { sorter.undoLastRun() }
+                    Button("Abbrechen", role: .cancel) {}
+                } message: {
+                    Text("\(plural(sorter.lastJournal.map { UndoEngine.preview($0) } ?? 0, "Datei geht", "Dateien gehen")) zurück an ihren ursprünglichen Platz, angelegte Ordner werden entfernt, sofern leer. Nichts wird überschrieben.")
+                }
+            }
 
             HStack(spacing: 12) {
                 Button { sorter.revealInFinder() } label: {
@@ -878,14 +980,48 @@ struct QuestionSheet: View {
                     Text(request.message).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if let ex = request.example, !ex.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Beispiel aus diesem Ordner").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                    Text(ex).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12)))
+            }
+            if !request.tree.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("So sieht es danach aus").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(Array(request.tree.enumerated()), id: \.offset) { _, line in
+                                Text(line).font(.system(size: 11, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }.frame(maxHeight: 180)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12)))
+            }
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(request.options) { o in
                     Button { choice = o.id } label: {
                         HStack(alignment: .top) {
                             Image(systemName: choice == o.id ? "largecircle.fill.circle" : "circle")
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(o.label).font(.system(size: 13, weight: .semibold))
+                                HStack(spacing: 6) {
+                                    Text(o.label).font(.system(size: 13, weight: .semibold))
+                                    if o.id == request.recommended {
+                                        Text("Empfohlen").font(.system(size: 10, weight: .bold))
+                                            .padding(.horizontal, 6).padding(.vertical, 1)
+                                            .background(Capsule().fill(Color.green.opacity(0.25)))
+                                    }
+                                }
                                 Text(o.detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                                if o.id == request.recommended, let r = request.reason, !r.isEmpty {
+                                    Text(r).font(.system(size: 11)).foregroundStyle(.green).fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                             Spacer()
                         }.contentShape(Rectangle())
@@ -904,11 +1040,15 @@ struct QuestionSheet: View {
                     }
                 }
             }
-            Toggle("Antwort merken (in den Einstellungen änderbar)", isOn: $remember).font(.system(size: 12))
+            Toggle(request.rememberLabel ?? "Antwort merken (gilt ab Start, in den Einstellungen änderbar)", isOn: $remember).font(.system(size: 12))
             HStack {
                 Button("Abbrechen") { sorter.answerQuestion(nil, remember: false); sorter.cancel() }
+                if request.canGoBack {
+                    Button { sorter.goBack() } label: { Label("Zurück", systemImage: "chevron.left") }
+                        .help("Zur vorigen Frage – die bisherige Antwort ist vorbelegt. Es wurde noch nichts verschoben.")
+                }
                 Spacer()
-                Button("Weiter") {
+                Button(request.options.contains(where: { $0.id == "start" }) && choice == "start" ? "Start" : "Weiter") {
                     var v: [String: String] = [:]
                     for f in request.fields {
                         let t = (values[f.id] ?? f.value).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -919,8 +1059,12 @@ struct QuestionSheet: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20).frame(width: request.fields.isEmpty ? 440 : 520)
-        .onAppear { if choice.isEmpty { choice = request.options.first?.id ?? "" } }
+        .padding(20).frame(width: request.fields.isEmpty && request.tree.isEmpty ? 460 : 540)
+        .interactiveDismissDisabled()
+        .onAppear {
+            if choice.isEmpty { choice = request.prefill ?? request.options.first?.id ?? "" }
+            if request.prefill != nil { values = request.prefillFields; remember = request.prefillRemember }
+        }
     }
 }
 
@@ -948,6 +1092,7 @@ struct ExtensionSheet: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(".\(e.ext.uppercased())").font(.system(size: 13, weight: .bold))
                                 Text("\(e.count)× – z. B. \(e.example)").font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                Text("Empfohlen: \(FileCategory.ignore.label) – unbekannte Dateien bleiben sicher, wo sie sind").font(.system(size: 10)).foregroundStyle(.green).lineLimit(2)
                             }
                             Spacer()
                             Picker("", selection: Binding(get: { choice[e.ext] ?? .ignore }, set: { choice[e.ext] = $0 })) {
@@ -1072,15 +1217,15 @@ struct SettingsView: View {
                         TextField("yyyy-MM-dd", text: $store.dateFormat).textFieldStyle(.roundedBorder).frame(width: 120)
                         Text("→ \(store.dayString(Date()))").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                     }
-                    WithHelp(title: "Nach Bildrate fragen", text: "Haben die neuen Clips mindestens zwei verschiedene Bildraten (z. B. 25 fps und 100 fps Zeitlupe), fragt CamSort vor dem Verschieben, ob zusätzlich nach Bildrate sortiert werden soll – z. B. Dreh/A1/50 fps/Hochkant. Bei nur einer Bildrate wird nicht gefragt.\n\n„Ja“ gilt nur für diesen Lauf. Mit „Antwort merken“ wird „Ja“ zur festen Ebene im Ordner-Aufbau, „Nein“ stellt die Frage hier auf „Nie“.\n\nGibt es im Dreh schon FPS-Ordner, führt CamSort die Struktur ohne Frage weiter.") {
-                        Text("Bildrate").font(.system(size: 12)).fixedSize()
-                        Picker("Bildrate", selection: $store.fpsMode) {
+                    WithHelp(title: "Nach Framerate fragen", text: "Haben die neuen Clips mindestens zwei verschiedene Frameraten (z. B. 25 fps und 100 fps Zeitlupe), fragt CamSort vor dem Verschieben, ob zusätzlich nach Framerate sortiert werden soll – z. B. Dreh/A1/50 fps/Hochkant. Bei nur einer Framerate wird nicht gefragt.\n\n„Ja“ gilt nur für diesen Lauf. Mit „Antwort merken“ wird „Ja“ zur festen Ebene im Ordner-Aufbau, „Nein“ stellt die Frage hier auf „Nie“.\n\nGibt es im Dreh schon FPS-Ordner, führt CamSort die Struktur ohne Frage weiter.") {
+                        Text("Framerate").font(.system(size: 12)).fixedSize()
+                        Picker("Framerate", selection: $store.fpsMode) {
                             Text("Fragen").tag("ask"); Text("Nie").tag("off")
                         }.labelsHidden().frame(width: 300)
                         .disabled(store.levels.contains("fps"))
                     }
                     if store.levels.contains("fps") {
-                        Text("Bildrate ist im Ordner-Aufbau fest aktiv – es wird nicht gefragt.").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text("Framerate ist im Ordner-Aufbau fest aktiv – es wird nicht gefragt.").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     WithHelp(title: "Nach Mitternacht", text: "An: Aufnahmen zwischen 0 und 4 Uhr zählen zum Vortag – praktisch bei Abend-Events, die über Mitternacht gehen.") {
                         Toggle("Aufnahmen bis 4 Uhr zählen zum Vortag", isOn: $store.nightToPrevDay)
@@ -1096,7 +1241,7 @@ struct SettingsView: View {
                         Toggle("Kompakte Ordner (nur was sich unterscheidet)", isOn: $store.compactLayout)
                     }
                     if store.compactLayout {
-                        WithHelp(title: "Videos-Sammelordner", text: "An (bisheriges Verhalten): Alle Video-Ebenen liegen in einem Ordner „Videos“ im Dreh – z. B. Pitbike/Videos/Sony ZV-E1/Quer.\n\nAus: Die Ebenen (Kamera › Objektiv › Ausrichtung …) liegen direkt im Dreh-Ordner – z. B. Pitbike/Sony ZV-E1/Quer bzw. Pitbike/Sony ZV-E1/FE 24-70/Hochkant. Fotos, Begleitdateien und Extras bleiben wie bisher in ihren eigenen Ordnern.\n\nErneutes Einlesen bleibt sicher: CamSort erkennt die sortierten Ordner an Ausrichtung, Bildrate bzw. Szene. Ist keine dieser Ebenen im Ordner-Aufbau aktiv, legt CamSort den Videos-Ordner trotzdem an.\n\nWer unter jedem Kameraordner nur Hochkant/Quer möchte (Pitbike/E1/Hochkant): Modus „Meine Kameraordner“.\n\nBereits sortierte Drehs: Beim erneuten Einwerfen fragt CamSort, ob sie nach den neuen Einstellungen neu geordnet werden sollen (nur verschieben).") {
+                        WithHelp(title: "Videos-Sammelordner", text: "An (bisheriges Verhalten): Alle Video-Ebenen liegen in einem Ordner „Videos“ im Dreh – z. B. Pitbike/Videos/Sony ZV-E1/Quer.\n\nAus: Die Ebenen (Kamera › Objektiv › Ausrichtung …) liegen direkt im Dreh-Ordner – z. B. Pitbike/Sony ZV-E1/Quer bzw. Pitbike/Sony ZV-E1/FE 24-70/Hochkant. Fotos, Begleitdateien und Extras bleiben wie bisher in ihren eigenen Ordnern.\n\nErneutes Einlesen bleibt sicher: CamSort erkennt die sortierten Ordner an Ausrichtung, Framerate bzw. Szene. Ist keine dieser Ebenen im Ordner-Aufbau aktiv, legt CamSort den Videos-Ordner trotzdem an.\n\nWer unter jedem Kameraordner nur Hochkant/Quer möchte (Pitbike/E1/Hochkant): Modus „Meine Kameraordner“.\n\nBereits sortierte Drehs: Beim erneuten Einwerfen fragt CamSort, ob sie nach den neuen Einstellungen neu geordnet werden sollen (nur verschieben).") {
                             Toggle("Videos-Sammelordner anlegen", isOn: $useVideosFolder)
                         }
                         LevelBuilder()
@@ -1109,6 +1254,12 @@ struct SettingsView: View {
                     WithHelp(title: "Kameras nachfragen", text: "An: Bei jeder neuen Kamera fragt CamSort einmal, unter welchem Namen sie einsortiert werden soll, und merkt sich die Antwort dauerhaft (siehe „Gelernt“ oben rechts).\nAus: Erkannte Kameras werden ohne Rückfrage einsortiert, unbekannte landen in „Unbekannt“.") {
                         Toggle("Bei neuen Kameras nachfragen und Namen merken", isOn: $store.confirmCameras)
                     }
+
+                    section("Datensicherheit")
+                    WithHelp(title: "Übersicht vor dem Verschieben", text: "Nachdem alle Fragen beantwortet sind, zeigt CamSort kurz, wie viele Dateien verschoben und wie viele Ordner angelegt werden, und eine Vorschau der Ordnerstruktur – erst mit „Start“ wird etwas bewegt. Abbrechen heißt: nichts passiert.\n\nJeder Schritt wird protokolliert (Application Support/CamSort/Protokolle und unsichtbar im Ordner selbst). Deshalb lässt sich jeder Lauf rückgängig machen – auch Wochen später und nach Umbenennen oder Verschieben des Ordners.") {
+                        Toggle("Vor dem Verschieben Übersicht zeigen", isOn: $store.showOverview)
+                    }
+                    RecentRunsView()
 
                     section("Ordner & Namen")
                     FolderNamingEditor()
@@ -1136,7 +1287,7 @@ struct SettingsView: View {
                     }
                     GyroPresetBox()
                     GyroNotifyBlock()
-                    WithHelp(title: "Ausgabe wie Eingabeclip", text: "Aus deinem Preset übernimmt CamSort nur Glättung und dynamisches Zoomen. Objektivprofil, Auflösung, Format, Bildrate, Codec und Ton richten sich nach jedem Clip.\n\nSo passt ein Preset für alle Kameras: Gyroflow wählt das Objektivprofil selbst aus den Metadaten, 4:3-, 1:1- und Hochkant-Clips behalten ihr Format, H.264 bleibt H.264, H.265 bleibt H.265, ProRes bleibt ProRes – mit etwa der Bitrate des Originals und mit Ton. Dein Preset selbst bleibt unverändert.\n\nAus: Gyroflow nutzt das Preset komplett (auch Objektiv, Größe und Export-Format daraus).") {
+                    WithHelp(title: "Ausgabe wie Eingabeclip", text: "Aus deinem Preset übernimmt CamSort nur Glättung und dynamisches Zoomen. Objektivprofil, Auflösung, Format, Framerate, Codec und Ton richten sich nach jedem Clip.\n\nSo passt ein Preset für alle Kameras: Gyroflow wählt das Objektivprofil selbst aus den Metadaten, 4:3-, 1:1- und Hochkant-Clips behalten ihr Format, H.264 bleibt H.264, H.265 bleibt H.265, ProRes bleibt ProRes – mit etwa der Bitrate des Originals und mit Ton. Dein Preset selbst bleibt unverändert.\n\nAus: Gyroflow nutzt das Preset komplett (auch Objektiv, Größe und Export-Format daraus).") {
                         Toggle("Ausgabe wie Eingabeclip (empfohlen)", isOn: $store.gyroMatchSource)
                     }
                     WithHelp(title: "Gyroflow-App", text: "CamSort sucht Gyroflow automatisch im Programme-Ordner. Nur falls Gyroflow woanders liegt, hier die Gyroflow-App auswählen.") {
@@ -1197,7 +1348,7 @@ struct GyroPresetBox: View {
                 Text(ok ? "Preset gespeichert: " + (store.gyroPresetPath as NSString).lastPathComponent : "Noch kein Gyroflow-Preset hinterlegt")
                     .font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 Spacer()
-                HelpButton(title: "Gyroflow-Preset", text: "Das Preset ist eine kleine Datei (Endung .gyroflow), in der deine gewohnten Gyroflow-Einstellungen stehen. Bei „Ausgabe wie Eingabeclip“ (Standard) übernimmt CamSort daraus nur Glättung und dynamisches Zoomen – Objektivprofil, Auflösung, Bildrate, Codec und Ton richten sich nach jedem Clip. An deinen Einstellungen in Gyroflow und an der Preset-Datei ändert sich nichts.")
+                HelpButton(title: "Gyroflow-Preset", text: "Das Preset ist eine kleine Datei (Endung .gyroflow), in der deine gewohnten Gyroflow-Einstellungen stehen. Bei „Ausgabe wie Eingabeclip“ (Standard) übernimmt CamSort daraus nur Glättung und dynamisches Zoomen – Objektivprofil, Auflösung, Framerate, Codec und Ton richten sich nach jedem Clip. An deinen Einstellungen in Gyroflow und an der Preset-Datei ändert sich nichts.")
             }
             HStack {
                 Button(ok ? "Anderes Preset wählen …" : "Preset-Datei wählen …") { choose() }
@@ -1416,14 +1567,14 @@ struct FolderNamingEditor: View {
                     GridRow { Text("Begleitdateien").font(.system(size: 11)); TextField("Begleitdateien", text: $side) }
                     GridRow { Text("Extras").font(.system(size: 11)); TextField("Extras", text: $extras) }
                     GridRow { Text("Quadratisch").font(.system(size: 11)); TextField("Quadratisch", text: $square) }
-                    GridRow { Text("Bildrate").font(.system(size: 11)); TextField("{n} fps", text: $fpsTemplate) }
+                    GridRow { Text("Framerate").font(.system(size: 11)); TextField("{n} fps", text: $fpsTemplate) }
                 }
                 .textFieldStyle(.roundedBorder).controlSize(.small)
             }
             WithHelp(title: "Quadratisch", text: "Quadratisch aufgenommen – daraus lassen sich Hochkant und Quer schneiden (z. B. DJI Osmo Action 6 mit 3840×3840). CamSort legt Clips mit einem Seitenverhältnis zwischen 0,9 und 1,1 in diesen Ordner. Ab 1,1 gilt: breiter = Quer (auch 4:3), höher = Hochkant (auch 3:4). Gyroflow lässt quadratische und 4:3-Clips im Originalformat, wenn das unter Gyroflow eingestellt ist.") {
                 Text("Ordner für 1:1-Clips").font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            WithHelp(title: "Ordnername Bildrate", text: "Schablone für FPS-Ordner: {n} wird durch die Bildrate ersetzt. „{n} fps“ → „50 fps“, „{n}p“ → „50p“. Ohne {n} gilt „{n} fps“. Ordner mit dem alten Standardnamen („50 fps“) erkennt CamSort weiterhin als sortiert.") {
+            WithHelp(title: "Ordnername Framerate", text: "Schablone für FPS-Ordner: {n} wird durch die Framerate ersetzt. „{n} fps“ → „50 fps“, „{n}p“ → „50p“. Ohne {n} gilt „{n} fps“. Ordner mit dem alten Standardnamen („50 fps“) erkennt CamSort weiterhin als sortiert.") {
                 Text("→ \(fpsTemplate.contains("{n}") ? fpsTemplate.replacingOccurrences(of: "{n}", with: "50") : "50 fps")").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
             }
             WithHelp(title: "Ordnername bei „Szene“", text: "Wie Szenen-Ordner heißen. Statt „Szene“ geht z. B. auch „Take“ oder „Einstellung“.") {
@@ -1531,7 +1682,7 @@ struct LevelBuilder: View {
                         .font(.system(size: 11)).controlSize(.small).padding(.leading, 26)
                     }
                     if on && lvl.id == "fps" {
-                        WithHelp(title: "Bildrate (FPS)", text: "Ordnet Clips nach ihrer Bildrate, z. B. „25 fps“, „50 fps“, „100 fps“. Gerundet wird auf feste Klassen: 23,976 und 24 → 24 fps, 29,97 → 30, 59,94 → 60, 119,88 → 120 (außerdem 25, 48, 50, 100, 200, 240). 24 und 25 oder 48 und 50 werden nie zusammengelegt.\n\nSony-Zeitlupe (S&Q): Die Datei hat z. B. 25p, aufgenommen wurde aber mit 100p – CamSort liest die Aufnahme-Bildrate aus dem Sony-XML und legt den Clip in „100 fps“.\n\nClips ohne feste Bildrate (manche Bildschirmaufnahmen) kommen in „\(FolderNames.fpsVariable)“. Den Ordnernamen stellst du unter „Ordnernamen“ ein.") {
+                        WithHelp(title: "Framerate (FPS)", text: "Ordnet Clips nach ihrer Framerate, z. B. „25 fps“, „50 fps“, „100 fps“. Gerundet wird auf feste Klassen: 23,976 und 24 → 24 fps, 29,97 → 30, 59,94 → 60, 119,88 → 120 (außerdem 25, 48, 50, 100, 200, 240). 24 und 25 oder 48 und 50 werden nie zusammengelegt.\n\nSony-Zeitlupe (S&Q): Die Datei hat z. B. 25p, aufgenommen wurde aber mit 100p – CamSort liest die Aufnahme-Framerate aus dem Sony-XML und legt den Clip in „100 fps“.\n\nClips ohne feste Framerate (manche Bildschirmaufnahmen) kommen in „\(FolderNames.fpsVariable)“. Den Ordnernamen stellst du unter „Ordnernamen“ ein.") {
                             Text("z. B. \(FolderNames.fpsName(25)), \(FolderNames.fpsName(50)), \(FolderNames.fpsName(100))").font(.system(size: 11)).foregroundStyle(.secondary)
                         }.padding(.leading, 26)
                     }
@@ -1560,6 +1711,51 @@ struct SelectsSettingsBlock: View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle("Knopf „Beste Momente finden“ nach dem Sortieren", isOn: $enabled).toggleStyle(.switch).font(.system(size: 12))
             if enabled { SelectsSettings() }
+        }
+    }
+}
+
+
+// MARK: - Letzte Läufe (Einstellungen)
+
+struct RecentRunsView: View {
+    @State private var runs: [RunInfo] = []
+    @State private var confirm: RunInfo?
+    @State private var result: String = ""
+    static let df: DateFormatter = { let f = DateFormatter(); f.dateFormat = "dd.MM.yyyy HH:mm"; return f }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Letzte Läufe").font(.system(size: 12, weight: .semibold))
+            if runs.isEmpty { Text("Noch keine Läufe protokolliert").font(.system(size: 11)).foregroundStyle(.secondary) }
+            ForEach(runs.prefix(15)) { r in
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(Self.df.string(from: r.date)) · \(r.title) · \(plural(r.files, "Datei", "Dateien"))").font(.system(size: 11, weight: .medium))
+                        Text(r.folders.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    if r.undone { Text("rückgängig gemacht").font(.system(size: 10)).foregroundStyle(.secondary) }
+                    else if JournalStore.canUndo(r, among: runs) { Button("Rückgängig") { confirm = r }.controlSize(.small) }
+                    Button { NSWorkspace.shared.activateFileViewerSelecting([r.url]) } label: { Image(systemName: "doc.text.magnifyingglass") }
+                        .buttonStyle(.plain).help("Protokoll im Finder zeigen")
+                }
+            }
+            if !result.isEmpty { Text(result).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+        }
+        .onAppear { runs = JournalStore.appRuns() }
+        .alert("Rückgängig machen?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), presenting: confirm) { r in
+            Button("Rückgängig machen") {
+                let rep = UndoService.undoApp(r.url)
+                var t = "\(plural(rep.restored, "Datei", "Dateien")) zurückgelegt, \(plural(rep.removedDirs, "leerer Ordner", "leere Ordner")) entfernt."
+                if !rep.skipped.isEmpty { t += " Übersprungen: " + rep.skipped.joined(separator: " · ") }
+                if !rep.fcpLibraries.isEmpty { t += " Final Cut: Mediatheken ggf. neu verknüpfen (" + rep.fcpLibraries.map(\.lastPathComponent).joined(separator: ", ") + ")." }
+                result = t
+                runs = JournalStore.appRuns(); confirm = nil
+            }
+            Button("Abbrechen", role: .cancel) { confirm = nil }
+        } message: { r in
+            Text("\(plural(UndoEngine.preview(r.url), "Datei geht", "Dateien gehen")) zurück an ihren ursprünglichen Platz. Nichts wird überschrieben.")
         }
     }
 }

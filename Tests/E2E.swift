@@ -38,6 +38,7 @@ struct E2E {
         store.dateMode = "off"; store.renameMode = "off"   // Rückfragen nur im eigenen Test
         store.fpsMode = "off"                                // FPS-Rückfrage nur im eigenen Test
         store.projectMode = "never"                          // Projekt-Rückfrage nur im eigenen Test
+        store.showOverview = false                           // Übersicht vor dem Verschieben nur im eigenen Test (6z)
         let sorter = Sorter(store: store)
         let gyro = GyroRunner(store: store, sorter: sorter)
         let tagger = TagRunner()
@@ -627,7 +628,7 @@ struct E2E {
             store.ownCameraFolders = false; store.dateMode = "off"; store.renameMode = "off"
         }
 
-        // 6b) Bildrate (FPS): Klassen, Rückfrage nur bei mehreren Bildraten, Ordner, Idempotenz
+        // 6b) Framerate (FPS): Klassen, Rückfrage nur bei mehreren Frameraten, Ordner, Idempotenz
         do {
             let fmx = FileManager.default
             check(FolderNames.fpsClass(23.976) == 24 && FolderNames.fpsClass(24) == 24 && FolderNames.fpsClass(25) == 25, "FPS-Klassen: 23,976/24 → 24, 25 → 25")
@@ -654,7 +655,7 @@ struct E2E {
                     if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
                     if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
                     if let q = sorter.pendingQuestion {
-                        if q.title.contains("Bildrate") {
+                        if q.title.contains("Framerate") {
                             fpsAsked += 1
                             if fpsAsked == 1 { render(QuestionSheet(request: q), "21-rueckfrage-bildrate", w: 440, h: 320, sheet: true) }
                             sorter.answerQuestion(answer, remember: false)
@@ -663,14 +664,14 @@ struct E2E {
                     try? await Task.sleep(nanoseconds: 50_000_000)
                 }
             }
-            // nur eine Bildrate → keine Frage
+            // nur eine Framerate → keine Frage
             try? fmx.copyItem(at: x.appendingPathComponent("F25.MP4"), to: b1.appendingPathComponent("F25.MP4"))
             await runF(b1, answer: "yes")
-            check(fpsAsked == 0 && fmx.fileExists(atPath: b1.appendingPathComponent("Quer/F25.MP4").path), "Nur eine Bildrate → keine Frage, B1/Quer")
-            // drei Bildraten → Frage, „Ja“ ohne Merken
+            check(fpsAsked == 0 && fmx.fileExists(atPath: b1.appendingPathComponent("Quer/F25.MP4").path), "Nur eine Framerate → keine Frage, B1/Quer")
+            // drei Frameraten → Frage, „Ja“ ohne Merken
             await runF(fdreh, answer: "yes")
             func exF(_ p: String) -> Bool { fmx.fileExists(atPath: fdreh.appendingPathComponent(p).path) }
-            check(fpsAsked == 1, "Verschiedene Bildraten → genau eine Frage")
+            check(fpsAsked == 1, "Verschiedene Frameraten → genau eine Frage")
             check(exF("A1/25 fps/Quer/F25.MP4") && exF("A1/50 fps/Quer/F50.MP4"), "Ordner „25 fps“ / „50 fps“ unter der Kamera")
             check(exF("A1/24 fps/Quer/F24.MP4"), "23,976 fps → eigener Ordner „24 fps“ (nicht 25)")
             check(!store.levels.contains("fps"), "„Ja“ ohne Merken gilt nur für diesen Lauf")
@@ -805,6 +806,126 @@ struct E2E {
             check(reorderAsked == 1 && tree() == t2, "Nach dem Neu-Ordnen: nächster Lauf ohne Frage, nichts verschoben")
             UserDefaults.standard.removeObject(forKey: "useVideosFolder")
             store.compactLayout = false
+        }
+
+        // 6z) Datensicherheit: erst alle Fragen, dann verschieben; Zurück; Protokoll; Rückgängig bitgleich (auch nach Absturz und Verschieben des Ordners)
+        do {
+            let fmx = FileManager.default
+            let x = root.deletingLastPathComponent().appendingPathComponent("CamSort-Extra")
+            let ds = root.deletingLastPathComponent().appendingPathComponent("CamSort-Sicherheit")
+            let woanders = root.deletingLastPathComponent().appendingPathComponent("CamSort-Woanders")
+            try? fmx.removeItem(at: ds); try? fmx.removeItem(at: woanders)
+            try? fmx.createDirectory(at: ds.appendingPathComponent("Karte/PRIVATE/M4ROOT/CLIP"), withIntermediateDirectories: true)
+            try? fmx.copyItem(at: x.appendingPathComponent("P1000.MP4"), to: ds.appendingPathComponent("C1000.MP4"))
+            try? fmx.copyItem(at: x.appendingPathComponent("P1001.MP4"), to: ds.appendingPathComponent("Karte/PRIVATE/M4ROOT/CLIP/C1001.MP4"))
+            try? fmx.copyItem(at: x.appendingPathComponent("P1500.MP4"), to: ds.appendingPathComponent("C1500.MP4"))
+            try? "<NonRealTimeMeta><Device manufacturer=\"Sony\" modelName=\"ILCE-1\"/></NonRealTimeMeta>".write(to: ds.appendingPathComponent("C1000M01.XML"), atomically: true, encoding: .utf8)
+            try? "notiz".write(to: ds.appendingPathComponent("Notiz.xyz"), atomically: true, encoding: .utf8)
+            try? Data([0xFF, 0xD8, 0xFF]).write(to: ds.appendingPathComponent("Foto.JPG"))
+
+            /// Alle sichtbaren Dateien + Ordner mit Größe und SHA-256 (CamSorts unsichtbare Dateien zählen nicht)
+            func snap(_ d: URL) -> [String: String] {
+                var out: [String: String] = [:]
+                for p in (try? fmx.subpathsOfDirectory(atPath: d.path)) ?? [] where !p.split(separator: "/").contains(where: { $0.hasPrefix(".") }) {
+                    let u = d.appendingPathComponent(p)
+                    var isDir: ObjCBool = false
+                    _ = fmx.fileExists(atPath: u.path, isDirectory: &isDir)
+                    if isDir.boolValue { out[p] = "dir"; continue }
+                    let data = (try? Data(contentsOf: u)) ?? Data()
+                    out[p] = "\(data.count)-" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                }
+                return out
+            }
+            store.ownCameraFolders = false; store.compactLayout = true; store.projectMode = "ask"; store.projectGapMinutes = 90
+            store.dateMode = "ask"; store.fpsMode = "ask"; store.renameMode = "off"; store.showOverview = true
+            UserDefaults.standard.set("no", forKey: "ownCamSuggest")
+            var asked: [String] = []
+            var shotOverview = false
+            func runS(_ decide: (QuestionRequest) -> String?) async {
+                asked = []
+                sorter.reset(); sorter.addFolders([ds]); sorter.start()
+                let t0 = Date()
+                while sorter.phase != .done && sorter.phase != .cancelled && Date().timeIntervalSince(t0) < 120 {
+                    if sorter.pendingExtensions != nil { sorter.answerExtensions([:], remember: false) }
+                    if let r = sorter.pendingCamera { sorter.answerCamera(r.suggestion.isEmpty ? "Kamera" : r.suggestion, remember: false) }
+                    if sorter.pendingDuplicate != nil { sorter.answerDuplicate(.skip, forAll: true) }
+                    if let q = sorter.pendingQuestion {
+                        asked.append(q.title + (q.prefill.map { " [vorbelegt: \($0)]" } ?? ""))
+                        if q.options.contains(where: { $0.id == "start" }) && !shotOverview {
+                            shotOverview = true
+                            render(QuestionSheet(request: q), "25-uebersicht-vor-dem-verschieben", w: 540, h: 560, sheet: true)
+                        }
+                        let a = decide(q)
+                        if a == "<zurueck>" { sorter.goBack() }
+                        else if let a { sorter.answerQuestion(a, remember: false, fields: ["name0": "Teil A", "name1": "Teil B"]) }
+                        else { sorter.answerQuestion(nil, remember: false); sorter.cancel() }
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            func other(_ q: QuestionRequest) -> String { q.options.contains { $0.id == "no" } ? "no" : (q.options.contains { $0.id == "off" } ? "off" : (q.options.first?.id ?? "off")) }
+            let before = snap(ds)
+            check(before.count >= 7, "Datensicherheit: Testordner angelegt (\(before.count) Einträge)")
+
+            // a) Abbruch in der letzten Frage (Übersicht) → nichts bewegt, kein Ordner angelegt
+            await runS { q in q.title.contains("Projekt") ? "split" : (q.options.contains { $0.id == "start" } ? nil : other(q)) }
+            report.append("ℹ️ Fragen (Abbruch): " + asked.joined(separator: " → "))
+            check(asked.contains { $0.contains("Projekt") } && asked.last == "Bereit zum Verschieben", "Alle Fragen (inkl. Projekte) kommen vor der Übersicht")
+            check(snap(ds) == before, "Abbruch in später Frage → Dateisystem bitgleich unverändert (Größe + SHA-256)")
+            check(!fmx.fileExists(atPath: ds.appendingPathComponent(".camsort-protokoll").path) && sorter.lastJournal == nil, "Abbruch vor dem Start → kein Protokoll, keine Dateioperation")
+
+            // b) Zurück: Übersicht → zurück zur Projekt-Frage (vorbelegt), Antwort ändern → Folgefragen neu berechnet
+            var backDone = false
+            await runS { q in
+                if q.title.contains("Projekt") { return q.prefill == nil ? "split" : "one" }
+                if q.options.contains(where: { $0.id == "start" }) {
+                    if !backDone { backDone = true; return "<zurueck>" }
+                    return "start"
+                }
+                return other(q)
+            }
+            report.append("ℹ️ Fragen (Zurück): " + asked.joined(separator: " → "))
+            check(asked.contains { $0.contains("[vorbelegt: split]") }, "Zurück zeigt die vorige Frage mit ihrer Antwort vorbelegt")
+            check(sorter.phase == .done && !fmx.fileExists(atPath: ds.appendingPathComponent("Teil A").path), "Geänderte Antwort („ein Projekt“) gilt – keine Projektordner")
+            let sortedB = snap(ds)
+            check(sortedB != before && sorter.lastJournal != nil, "Sortiert, Protokoll vorhanden (\(sorter.lastJournal?.lastPathComponent ?? "-"))")
+            sorter.undoLastRun()
+            check(snap(ds) == before, "Sortieren → Rückgängig → bitgleich wie vorher (\(sorter.undoResult?.report.skipped.joined(separator: " | ") ?? ""))")
+
+            // c) Projekt-Trennung + Neu-Ordnen-Struktur → Rückgängig bitgleich
+            await runS { q in q.title.contains("Projekt") ? "split" : (q.options.contains { $0.id == "start" } ? "start" : other(q)) }
+            check(sorter.phase == .done && fmx.fileExists(atPath: ds.appendingPathComponent("Teil A").path) && fmx.fileExists(atPath: ds.appendingPathComponent("Teil B").path), "Projekt-Trennung ausgeführt (nach allen Fragen)")
+            check(((try? fmx.contentsOfDirectory(atPath: ds.appendingPathComponent(".camsort-protokoll").path)) ?? []).contains { $0.hasSuffix(".json") }, "Protokoll-Kopie liegt unsichtbar im Ordner (.camsort-protokoll)")
+            render(DoneView(), "26-fertig-mit-rueckgaengig")
+            sorter.undoLastRun()
+            check(snap(ds) == before, "Projekt-Trennung → Rückgängig → bitgleich, Projektordner entfernt")
+
+            // d) „Absturz“ mitten im Lauf: Protokoll ohne die letzten Zeilen + halbe Zeile → Rückgängig aus dem Protokoll
+            await runS { q in q.title.contains("Projekt") ? "one" : (q.options.contains { $0.id == "start" } ? "start" : other(q)) }
+            if let jf = sorter.lastJournal, let text = try? String(contentsOf: jf, encoding: .utf8) {
+                var lines = text.split(separator: "\n").map(String.init)
+                lines = Array(lines.dropLast(min(3, max(0, lines.count - 2))))
+                let crash = JournalIO.appDir.appendingPathComponent("E2E-Absturz.json")
+                try? (lines.joined(separator: "\n") + "\n{\"n\":9999,\"art\":\"verschi").write(to: crash, atomically: true, encoding: .utf8)
+                let r = UndoService.undoApp(crash)
+                check(snap(ds) == before, "Protokoll nach „Absturz“ lesbar → Rückgängig bitgleich (\(r.restored) zurück, \(r.skipped.count) übersprungen)")
+                check(JournalStore.info(crash, root: URL(fileURLWithPath: "/"))?.undone == true, "Protokoll als „rückgängig gemacht“ markiert (nicht gelöscht)")
+                try? fmx.removeItem(at: crash)
+            } else { check(false, "Protokoll des Laufs lesbar") }
+
+            // e) Wochen später: Ordner umbenannt und woanders hin verschoben → erneut einwerfen → Rückgängig aus dem Protokoll im Ordner
+            await runS { q in q.title.contains("Projekt") ? "split" : (q.options.contains { $0.id == "start" } ? "start" : other(q)) }
+            try? fmx.createDirectory(at: woanders, withIntermediateDirectories: true)
+            let moved = woanders.appendingPathComponent("Sicherheit umbenannt")
+            try? fmx.moveItem(at: ds, to: moved)
+            sorter.reset(); sorter.addFolders([moved])
+            let runs = sorter.folderRuns[moved.path] ?? []
+            check(runs.count >= 1 && JournalStore.canUndo(runs[0], among: runs), "Erneut eingeworfen: Startbildschirm zeigt „Sortiert am … – Rückgängig machen“ (\(runs.count) Läufe)")
+            render(IdleView(), "27-start-rueckgaengig-im-ordner")
+            if let r = runs.first(where: { JournalStore.canUndo($0, among: runs) }) { sorter.undoFolderRun(r) }
+            check(snap(moved) == before, "Umbenannt + verschoben → Rückgängig aus dem Ordner-Protokoll → bitgleich")
+            check((sorter.folderRuns[moved.path] ?? []).first?.undone == true, "Ordner-Protokoll als „rückgängig gemacht“ markiert")
+            store.compactLayout = false; store.projectMode = "never"; store.dateMode = "off"; store.fpsMode = "off"; store.showOverview = false
         }
 
         // 7) Weitere Ansichten

@@ -63,6 +63,21 @@ final class QuestionRequest: Identifiable {
     let icon: String
     let options: [QuestionOption]
     let fields: [QuestionField]
+    /// Konkretes Beispiel aus genau diesem Ordner (echter Dateiname → Zielpfad)
+    var example: String? = nil
+    /// Empfohlene Option (nur hervorgehoben, nie automatisch übernommen) und kurzer Grund
+    var recommended: String? = nil
+    var reason: String? = nil
+    /// Vorschau der Ordnerstruktur (Übersicht)
+    var tree: [String] = []
+    /// Beschriftung des Merken-Hakens (Standard: „Antwort merken“)
+    var rememberLabel: String? = nil
+    /// „Zurück“ möglich (Fragenrunde vor dem ersten Verschieben, nicht bei der ersten Frage)
+    var canGoBack = false
+    /// Vorbelegung nach „Zurück“
+    var prefill: String? = nil
+    var prefillFields: [String: String] = [:]
+    var prefillRemember = false
     let continuation: CheckedContinuation<(String, Bool)?, Never>
     init(title: String, message: String, icon: String, options: [QuestionOption], fields: [QuestionField] = [],
          continuation: CheckedContinuation<(String, Bool)?, Never>) {
@@ -82,7 +97,32 @@ struct PreRunQuestion {
     let remember: (String) -> Void
     /// Optionale Textfelder; Antworten landen in resolve() unter "<key>.<feld-id>"
     var fields: [QuestionField] = []
+    /// Echtes Beispiel aus diesem Ordner, z. B. „C0042.MP4 → Pitbike/E1/50 fps/Hochkant“
+    var example: String? = nil
+    /// Empfohlene Option + Grund (nur hervorgehoben, nie automatisch übernommen)
+    var recommended: String? = nil
+    var reason: String? = nil
+    var tree: [String] = []
+    var rememberLabel: String? = nil
 }
+
+/// Eine beantwortete Frage der Fragenrunde (für „Zurück“: wird beim Neuberechnen still wiederholt)
+struct LoggedAnswer {
+    let key: String
+    let answer: String
+    let fields: [String: String]
+    let remember: Bool
+}
+
+/// Ergebnis eines Rückgängig-Laufs für die Anzeige
+struct UndoResultInfo: Identifiable {
+    let id = UUID()
+    let title: String
+    let report: UndoReport
+}
+
+/// Was nach einem erfolgreichen Verschieben gezählt wird
+enum MoveCounter { case video(String?, String), side(String), photo }
 
 enum Phase { case idle, scanning, sorting, done, cancelled }
 
@@ -157,6 +197,37 @@ final class Sorter: ObservableObject {
     @Published var pendingCamera: CameraRequest?
     @Published var pendingExtensions: ExtensionRequest?
     @Published var pendingQuestion: QuestionRequest?
+    // MARK: Datensicherheit
+    /// Protokoll des laufenden bzw. letzten Laufs
+    var journal: RunJournal?
+    /// Protokolldatei des letzten Laufs mit Änderungen (Knopf „Rückgängig machen“ im Fertig-Bildschirm)
+    @Published var lastJournal: URL?
+    @Published var lastJournalUndone = false
+    @Published var undoResult: UndoResultInfo?
+    /// Protokolle, die in den eingeworfenen Ordnern liegen (Startbildschirm: „Sortiert am … – Rückgängig machen“)
+    @Published var folderRuns: [String: [RunInfo]] = [:]
+    /// Speicherkarte → zum Import wechseln (ContentView öffnet den Import mit dieser Quelle)
+    @Published var importRequest: URL?
+    /// Übersicht bestätigt bzw. erstes Verschieben erfolgt → ab hier keine „Zurück“-Navigation mehr
+    private(set) var executionConfirmed = false
+    private var safetyStop = false
+    private var cancelledInQuestion = false
+    private var goImport = false
+    private var answerLog: [LoggedAnswer] = []
+    private var replay: [LoggedAnswer] = []
+    private var prefillNext: LoggedAnswer?
+    private var backRequested = false
+    /// „Antwort merken“ wird erst beim Start (Übersicht bestätigt) dauerhaft gespeichert
+    private var pendingRemembers: [(apply: (String) -> Void, value: String)] = []
+    private var pendingLearn: [() -> Void] = []
+    /// In der Fragenrunde beantwortete Dateitypen (gelten für den ganzen Lauf)
+    private var sessionExt: [String: FileCategory] = [:]
+    private var originalFolders: [URL] = []
+    /// Projekt-Trennung: geplant in Phase 1, ausgeführt erst nach allen Fragen
+    fileprivate var splitPlans: [SplitPlan] = []
+    private var plannedFolders: [URL] = []
+    /// Layout-Dateien, die erst nach der Übersicht geschrieben werden
+    private var layoutWrites: [(LayoutSig, URL)] = []
     /// Aufnahmezeiten je gewähltem Ordner (für „Datum in den Ordnernamen“)
     private var drehStarts: [String: [Date]] = [:]
     /// Modus „Meine Kameraordner“: Ergebnis je Kameraordner
@@ -205,6 +276,7 @@ final class Sorter: ObservableObject {
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue, !folders.contains(u) { folders.append(u) }
         }
+        refreshFolderRuns()
     }
 
     /// true, solange das Finder-Fenster zur Ordnerwahl offen ist (Startbildschirm pausiert dann seine Animation)
@@ -252,26 +324,273 @@ final class Sorter: ObservableObject {
         problems = []; hints = []; movedVideos = 0; videosRootCache = [:]; folderStats = []; gyroOffer = []; gyroOfferByCamera = [:]; drehStarts = [:]; projectSummaries = []; projectRoots = []; dupForAll = nil; skipAsking = false; askedCameras = [:]; gyroMoved = 0
     }
 
+    /// Lauf in zwei Phasen: 1) Fragenrunde + Planung (keine einzige Dateioperation), 2) Ausführen mit Protokoll.
     func start() {
         guard !folders.isEmpty else { return }
         FolderNames.load()
         cfg = RunSettings(store)
+        originalFolders = folders
         Self.selectedBases = Set(folders.map { $0.standardizedFileURL.path })
         clearResults(); processed = 0
+        beginJournal("Sortieren")
         phase = .scanning
         task = Task {
-            guard await suggestOwnCameraFolders() else { phase = .cancelled; stepLabel = ""; return }
-            stepLabel = "Projekte prüfen …"
-            guard await splitProjects() else { phase = .cancelled; stepLabel = ""; return }
-            stepLabel = cfg.ownCameraFolders ? "Meine Kameraordner: Hochkant / Quer"
-                      : alreadySorted ? "Ordner schon sortiert – suche neue Dateien" : "Schritt 1: Sortieren"
-            if cfg.ownCameraFolders { await runOwnCameraFolders() } else { await run() }
-            guard phase != .cancelled, !Task.isCancelled else { return }
-            await renameDrehFolders()
-            guard phase != .cancelled, !Task.isCancelled else { return }
-            if cfg.autoGyro { await runGyro(auto: true) }
-            stepLabel = ""
-            phase = Task.isCancelled ? .cancelled : .done
+            while true {
+                backRequested = false
+                await flow()
+                // „Zurück“ in der Fragenrunde: Phase 1 neu berechnen, bisherige Antworten still wiederholen
+                if backRequested && !hasOps && !Task.isCancelled {
+                    let keepCams = askedCameras, keepExt = sessionExt, keepSkip = skipAsking
+                    folders = originalFolders
+                    Self.selectedBases = Set(folders.map { $0.standardizedFileURL.path })
+                    cfg = RunSettings(store)
+                    clearResults(); processed = 0
+                    askedCameras = keepCams; sessionExt = keepExt; skipAsking = keepSkip
+                    answerLog = []
+                    splitPlans = []; plannedFolders = []; layoutWrites = []
+                    executionConfirmed = false; cancelledInQuestion = false
+                    phase = .scanning
+                    continue
+                }
+                break
+            }
+            finishRun()
+        }
+    }
+
+    private func flow() async {
+        guard await cardCheck() else { phase = .cancelled; stepLabel = ""; return }
+        guard await suggestOwnCameraFolders() else { phase = .cancelled; stepLabel = ""; return }
+        stepLabel = "Projekte prüfen …"
+        guard await splitProjects() else { phase = .cancelled; stepLabel = ""; return }
+        stepLabel = "Dateien prüfen …"
+        guard await preAsk() else { phase = .cancelled; stepLabel = ""; return }
+        if !splitPlans.isEmpty {
+            guard await executeSplits() else { phase = .cancelled; stepLabel = ""; return }
+        }
+        stepLabel = cfg.ownCameraFolders ? "Meine Kameraordner: Hochkant / Quer"
+                  : alreadySorted ? "Ordner schon sortiert – suche neue Dateien" : "Schritt 1: Sortieren"
+        if cfg.ownCameraFolders { await runOwnCameraFolders() } else { await run() }
+        guard phase != .cancelled, !Task.isCancelled, !safetyStop else { return }
+        await renameDrehFolders()
+        guard phase != .cancelled, !Task.isCancelled, !safetyStop else { return }
+        if cfg.autoGyro { await runGyro(auto: true) }
+        stepLabel = ""
+        phase = Task.isCancelled || safetyStop ? .cancelled : .done
+    }
+
+    // MARK: Datensicherheit – Protokoll, Fragenrunde, Übersicht
+
+    var hasOps: Bool { !(journal?.isEmpty ?? true) }
+
+    private func beginJournal(_ title: String) {
+        journal?.close()
+        journal = RunJournal(title: title, bases: folders)
+        lastJournal = nil; lastJournalUndone = false
+        executionConfirmed = false; safetyStop = false; cancelledInQuestion = false; goImport = false
+        answerLog = []; replay = []; prefillNext = nil; backRequested = false
+        pendingRemembers = []; pendingLearn = []; sessionExt = [:]
+        splitPlans = []; plannedFolders = []; layoutWrites = []
+    }
+
+    private var j: RunJournal {
+        if let x = journal { return x }
+        let x = RunJournal(title: "Sortieren", bases: folders)
+        journal = x
+        return x
+    }
+
+    /// Ab hier wird ausgeführt: gemerkte Antworten jetzt dauerhaft speichern
+    private func confirmExecution() {
+        executionConfirmed = true
+        for r in pendingRemembers { r.apply(r.value) }
+        for l in pendingLearn { l() }
+        pendingRemembers = []; pendingLearn = []
+    }
+
+    private func finishRun() {
+        stepLabel = ""
+        currentFile = ""
+        if safetyStop { phase = .cancelled }
+        if phase == .done { confirmExecution() } else { pendingRemembers = []; pendingLearn = [] }
+        // Abbruch in einer Rückfrage, nachdem schon verschoben wurde (nur nach einer Projekt-Trennung möglich) → automatisch zurück
+        if phase == .cancelled && cancelledInQuestion && hasOps && !safetyStop, let j = journal {
+            j.close()
+            let r = UndoService.undoApp(j.appURL)
+            hints.insert("Abgebrochen – die schon angelegten Projektordner wurden automatisch zurückgesetzt (\(plural(r.restored, "Datei", "Dateien")) zurück).", at: 0)
+            problems += r.skipped
+            lastJournalUndone = true
+        }
+        journal?.close()
+        if hasOps, let j = journal { lastJournal = j.appURL }
+        if goImport { phase = .idle; goImport = false }
+        refreshFolderRuns()
+    }
+
+    /// Sofort stoppen (z. B. wenn eine Prüfung nach dem Verschieben fehlschlägt)
+    private func stopForSafety(_ msg: String) {
+        safetyStop = true
+        problems.insert(msg, at: 0)
+        task?.cancel()
+    }
+
+    /// „Zurück“ in der Fragenrunde: vorige Frage mit ihrer Antwort vorbelegt zeigen, Folgefragen neu berechnen
+    func goBack() {
+        guard let p = pendingQuestion, !answerLog.isEmpty, !hasOps else { return }
+        prefillNext = answerLog.last
+        replay = Array(answerLog.dropLast())
+        backRequested = true
+        pendingQuestion = nil
+        p.continuation.resume(returning: nil)
+    }
+
+    /// Protokolle in den gewählten Ordnern lesen (Startbildschirm)
+    func refreshFolderRuns() {
+        var m: [String: [RunInfo]] = [:]
+        for f in folders {
+            let r = JournalStore.folderRuns(f)
+            if !r.isEmpty { m[f.path] = r }
+        }
+        folderRuns = m
+    }
+
+    /// Letzten Lauf rückgängig machen (Fertig-Bildschirm)
+    func undoLastRun() {
+        guard let u = lastJournal, !isRunning else { return }
+        let r = UndoService.undoApp(u)
+        lastJournalUndone = true
+        applyUndo(r, title: "Lauf rückgängig gemacht")
+    }
+
+    /// Lauf aus dem Protokoll im Ordner rückgängig machen (Startbildschirm, auch Wochen später)
+    func undoFolderRun(_ info: RunInfo) {
+        guard !isRunning else { return }
+        let r = UndoService.undoFolder(info)
+        if let nr = r.newRoot {
+            folders = folders.map { $0.standardizedFileURL.path == info.root.standardizedFileURL.path ? nr : $0 }
+        }
+        applyUndo(r, title: "Lauf rückgängig gemacht")
+    }
+
+    private func applyUndo(_ r: UndoReport, title: String) {
+        if let nr = r.newRoot, let first = folders.first, folders.count == 1, !FileManager.default.fileExists(atPath: first.path) { folders = [nr] }
+        fcpLibraries = r.fcpLibraries
+        undoResult = UndoResultInfo(title: title, report: r)
+        refreshFolderRuns()
+    }
+
+    /// Speicherkarte eingeworfen? Erst kopieren (Import) empfehlen. false = nicht sortieren.
+    private func cardCheck() async -> Bool {
+        for f in folders where Safety.isMemoryCard(f) {
+            let clip = (fm.enumerator(at: f, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])?.allObjects as? [URL] ?? [])
+                .first { Self.videoExt.contains($0.pathExtension.lowercased()) }
+            let q = PreRunQuestion(
+                key: "card", title: "Das ist eine Speicherkarte",
+                message: "„\(f.lastPathComponent)“ liegt auf einer Speicherkarte bzw. einem Wechseldatenträger. Erst kopieren (Import) und die Kopie sortieren?",
+                icon: "sdcard",
+                options: [QuestionOption(id: "import", label: "Zum Import", detail: "Tage wählen, kopieren, per Prüfsumme kontrollieren, dann die Kopie sortieren"),
+                          QuestionOption(id: "here", label: "Trotzdem hier sortieren", detail: "Dateien werden auf der Karte verschoben"),
+                          QuestionOption(id: "cancel", label: "Abbrechen", detail: "Nichts passiert")],
+                preset: nil, remember: { _ in },
+                example: clip.map { "\($0.lastPathComponent) bleibt auf der Karte – sortiert wird die Kopie" },
+                recommended: "import", reason: "Die Karte bleibt unverändert; Kamera-Software findet ihre Clips weiter.")
+            guard let a = await resolve([q]) else { return false }
+            switch a["card"] {
+            case "import": importRequest = f; goImport = true; return false
+            case "here": continue
+            default: cancelledInQuestion = true; return false
+            }
+        }
+        return true
+    }
+
+    /// Fragenrunde vor dem ersten Verschieben: unbekannte Dateitypen und Kameras über alle Ordner hinweg. false = abgebrochen.
+    private func preAsk() async -> Bool {
+        var unknown: [String: (example: String, count: Int)] = [:]
+        var all: [(dir: URL, url: URL, ext: String)] = []
+        for base in folders { all += collect(base) ?? [] }
+        for f in all where category(for: f.ext) == nil {
+            let cur = unknown[f.ext]
+            unknown[f.ext] = (cur?.example ?? f.url.lastPathComponent, (cur?.count ?? 0) + 1)
+        }
+        guard let ext = await askUnknown(unknown) else { return false }
+        let videos = all.filter { (category(for: $0.ext) ?? ext[$0.ext]) == .video }
+        guard !cfg.ownCameraFolders else { return true }
+        // Kamera-Rückfragen vorziehen: Antworten werden je Kamera-Signatur gemerkt und beim Sortieren ohne neue Frage benutzt
+        var sibCache: [URL: Set<String>] = [:]
+        for v in videos {
+            if Task.isCancelled { return false }
+            if skipAsking { break }
+            currentFile = v.url.lastPathComponent
+            var sib = sibCache[v.dir] ?? Set((try? fm.contentsOfDirectory(atPath: v.dir.path)) ?? [])
+            sibCache[v.dir] = sib
+            if cfg.compactLayout, let x = sidecar(v.url.deletingPathExtension().lastPathComponent, exts: ["M01.XML", "M01.xml"], near: v.dir) { sib.insert(x.lastPathComponent) }
+            guard await camera(for: v.url, asset: AVURLAsset(url: v.url), siblings: sib) != nil else { return false }
+        }
+        currentFile = ""
+        return true
+    }
+
+    /// Ordnerpfad zur Anzeige: „<gewählter Ordner>/<relativer Pfad>“
+    func relPath(_ u: URL) -> String {
+        let p = u.standardizedFileURL.path
+        if let b = Self.selectedBases.filter({ p == $0 || p.hasPrefix($0 + "/") }).max(by: { $0.count < $1.count }) {
+            let name = (b as NSString).lastPathComponent
+            return p == b ? name : name + "/" + String(p.dropFirst(b.count + 1))
+        }
+        return u.lastPathComponent
+    }
+
+    /// Vorschau der Zielstruktur: obere Ebenen + Anzahl Dateien je Ordner
+    func treePreview(_ dirs: [URL]) -> [String] {
+        var c: [String: Int] = [:]
+        for d in dirs { c[relPath(d).split(separator: "/").prefix(4).joined(separator: "/"), default: 0] += 1 }
+        var lines: [String] = []
+        for k in c.keys.sorted() {
+            let parts = k.split(separator: "/")
+            let indent = String(repeating: "   ", count: max(0, parts.count - 1))
+            lines.append("\(indent)\(parts.last ?? "")/  · \(plural(c[k] ?? 0, "Datei", "Dateien"))")
+        }
+        if lines.count > 16 { let more = lines.count - 15; lines = Array(lines.prefix(15)) + ["… und \(more) weitere Ordner"] }
+        return lines
+    }
+
+    /// Kurze Übersicht vor dem ersten Verschieben (abschaltbar). false = abgebrochen.
+    private func confirmOverview(_ moves: [(URL, URL)], note: String = "") async -> Bool {
+        let real = moves.filter { $0.0.deletingLastPathComponent().standardizedFileURL.path != $0.1.standardizedFileURL.path }
+        guard !real.isEmpty, !executionConfirmed else { return true }
+        if !store.showOverview { confirmExecution(); return true }
+        var newDirs = Set<String>()
+        for m in real {
+            var cur = m.1.standardizedFileURL
+            while !fm.fileExists(atPath: cur.path) {
+                newDirs.insert(cur.path)
+                let p = cur.deletingLastPathComponent()
+                if p.path == cur.path { break }
+                cur = p
+            }
+        }
+        let q = PreRunQuestion(
+            key: "overview", title: "Bereit zum Verschieben",
+            message: "\(plural(real.count, "Datei wird", "Dateien werden")) verschoben, \(plural(newDirs.count, "Ordner", "Ordner")) angelegt – nichts wird verändert oder gelöscht. Rückgängig jederzeit möglich." + note,
+            icon: "checkmark.shield",
+            options: [QuestionOption(id: "start", label: "Start", detail: "Jeder Schritt wird protokolliert"),
+                      QuestionOption(id: "cancel", label: "Abbrechen", detail: "Keine Datei wird bewegt")],
+            preset: nil,
+            remember: { [weak self] a in if a == "start" { self?.store.showOverview = false } },
+            example: real.first.map { "\($0.0.lastPathComponent) → \(relPath($0.1))" },
+            recommended: "start", reason: "Alle Fragen sind beantwortet; jeder Schritt lässt sich rückgängig machen.",
+            tree: treePreview(real.map { $0.1 }), rememberLabel: "Übersicht nicht mehr anzeigen")
+        guard let a = await resolve([q]), a["overview"] == "start" else { cancelledInQuestion = true; return false }
+        confirmExecution()
+        return true
+    }
+
+    private func tally(_ c: MoveCounter) {
+        switch c {
+        case .video(let o, let cam): movedVideos += 1; counts[o ?? "Video", default: 0] += 1; cameras[cam, default: 0] += 1
+        case .side(let k): sideCounts[k, default: 0] += 1
+        case .photo: counts["Fotos", default: 0] += 1
         }
     }
 
@@ -287,6 +606,17 @@ final class Sorter: ObservableObject {
             if cams.count >= 2 { names += cams }
         }
         guard let first = names.first else { return true }
+        var sampleClip: (clip: String, cam: String)? = nil
+        for base in folders where sampleClip == nil {
+            for n in names where sampleClip == nil {
+                let d = base.appendingPathComponent(n)
+                if let en = fm.enumerator(at: d, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                    while let u = en.nextObject() as? URL {
+                        if Self.videoExt.contains(u.pathExtension.lowercased()) { sampleClip = (u.lastPathComponent, "\(base.lastPathComponent)/\(n)"); break }
+                    }
+                }
+            }
+        }
         let shown = names.count > 4 ? names.prefix(3).joined(separator: ", ") + " …" : names.joined(separator: ", ")
         let normal = wantsVideosFolder ? "Dreh/\(FolderNames.videos)/Kamera/…" : "Dreh/Kamera/…"
         let q = PreRunQuestion(
@@ -298,7 +628,10 @@ final class Sorter: ObservableObject {
             preset: nil,
             remember: { [weak self] a in
                 if a == "yes" { self?.store.ownCameraFolders = true } else { UserDefaults.standard.set("no", forKey: "ownCamSuggest") }
-            })
+            },
+            example: sampleClip.map { "\($0.clip) → \($0.cam)/Hochkant bzw. \($0.cam)/Quer" },
+            recommended: "yes",
+            reason: "\(names.count) Unterordner enthalten jeweils Clips genau einer Kamera.")
         guard let a = await resolve([q]) else { return false }
         if a["owncams"] == "yes" { cfg.ownCameraFolders = true }
         return true
@@ -323,7 +656,13 @@ final class Sorter: ObservableObject {
         cfg = RunSettings(store)
         clearResults(); processed = 0
         phase = .scanning
-        task = Task { stepLabel = "Gyroflow-Dateien trennen"; await runGyro(auto: false); stepLabel = ""; phase = Task.isCancelled ? .cancelled : .done }
+        Self.selectedBases = Set(folders.map { $0.standardizedFileURL.path })
+        beginJournal("Gyroflow trennen")
+        task = Task {
+            stepLabel = "Gyroflow-Dateien trennen"; await runGyro(auto: false); stepLabel = ""
+            phase = Task.isCancelled || safetyStop ? .cancelled : .done
+            finishRun()
+        }
     }
 
     private func runGyro(auto: Bool) async {
@@ -369,11 +708,14 @@ final class Sorter: ObservableObject {
         if !auto && untouched > 0 && !jobs.isEmpty {
             hints.append("\(untouched) Ordner ohne stabilisierte Clips – unverändert gelassen")
         }
+        if !auto {
+            guard await confirmOverview(jobs.map { ($0.0, $0.0.deletingLastPathComponent().appendingPathComponent($0.1)) }) else { phase = .cancelled; return }
+        }
         stepLabel = "Schritt 2: Gyroflow-Dateien trennen"
         total = jobs.count; processed = 0
         phase = .sorting
         for (f, target) in jobs.sorted(by: { $0.0.path < $1.0.path }) {
-            if Task.isCancelled { phase = .cancelled; return }
+            if Task.isCancelled || safetyStop { phase = .cancelled; return }
             currentFile = f.lastPathComponent
             if await move(f, to: f.deletingLastPathComponent().appendingPathComponent(target)) {
                 sideCounts[target, default: 0] += 1
@@ -388,6 +730,7 @@ final class Sorter: ObservableObject {
     }
 
     func cancel() {
+        if pendingQuestion != nil || pendingExtensions != nil || pendingCamera != nil { cancelledInQuestion = true }
         task?.cancel()
         if let p = pendingDuplicate { pendingDuplicate = nil; p.continuation.resume(returning: (.skip, false)) }
         if let p = pendingCamera { pendingCamera = nil; p.continuation.resume(returning: nil) }
@@ -403,27 +746,53 @@ final class Sorter: ObservableObject {
     }
 
     /// Fragen nacheinander klären. Ergebnis: key → Antwort; nil = abgebrochen.
+    /// „Antwort merken“ gilt erst beim Start (Übersicht bestätigt); vorher nur vorgemerkt. Nach „Zurück“ werden die
+    /// früheren Antworten still wiederholt, bis die Frage kommt, zu der zurückgesprungen wurde (vorbelegt).
     func resolve(_ questions: [PreRunQuestion]) async -> [String: String]? {
         var out: [String: String] = [:]
         for q in questions {
             if let p = q.preset { out[q.key] = p; continue }
-            lastFieldAnswers = [:]
-            let a: (String, Bool)? = await withCheckedContinuation { c in
-                pendingQuestion = QuestionRequest(title: q.title, message: q.message, icon: q.icon, options: q.options,
-                                                  fields: q.fields, continuation: c)
+            let ans: LoggedAnswer
+            if let r = replay.first, r.key == q.key, r.answer != "", q.options.contains(where: { $0.id == r.answer }) {
+                replay.removeFirst()
+                ans = r
+            } else {
+                replay = []
+                let pre = prefillNext?.key == q.key ? prefillNext : nil
+                prefillNext = nil
+                lastFieldAnswers = [:]
+                let canBack = !answerLog.isEmpty && !hasOps && !executionConfirmed
+                let a: (String, Bool)? = await withCheckedContinuation { c in
+                    let r = QuestionRequest(title: q.title, message: q.message, icon: q.icon, options: q.options,
+                                            fields: q.fields, continuation: c)
+                    r.example = q.example; r.recommended = q.recommended; r.reason = q.reason
+                    r.tree = q.tree; r.rememberLabel = q.rememberLabel; r.canGoBack = canBack
+                    if let pre, q.options.contains(where: { $0.id == pre.answer }) {
+                        r.prefill = pre.answer; r.prefillFields = pre.fields; r.prefillRemember = pre.remember
+                    }
+                    pendingQuestion = r
+                }
+                guard let a, !Task.isCancelled else {
+                    if !backRequested { cancelledInQuestion = true }
+                    return nil
+                }
+                var f: [String: String] = [:]
+                for fl in q.fields { f[fl.id] = lastFieldAnswers[fl.id] ?? fl.value }
+                ans = LoggedAnswer(key: q.key, answer: a.0, fields: f, remember: a.1)
             }
-            guard let a, !Task.isCancelled else { return nil }
-            let opt = a.0, rem = a.1
-            if rem { q.remember(opt) }
-            out[q.key] = opt
-            for f in q.fields { out[q.key + "." + f.id] = lastFieldAnswers[f.id] ?? f.value }
+            answerLog.append(ans)
+            if ans.remember {
+                if executionConfirmed { q.remember(ans.answer) } else { pendingRemembers.append((apply: q.remember, value: ans.answer)) }
+            }
+            out[q.key] = ans.answer
+            for fl in q.fields { out[q.key + "." + fl.id] = ans.fields[fl.id] ?? fl.value }
         }
         return out
     }
 
     /// Frage „Auch nach Datum sortieren?“ – nur relevant, wenn die Clips von mehreren Tagen stammen.
     /// existing: vorhandene Tagesordner-Struktur ("top"/"under") → gleiche Struktur weiterführen, nicht fragen.
-    func dateQuestion(starts: [Date], existing: String?, example: (top: String, under: String)) -> PreRunQuestion? {
+    func dateQuestion(starts: [Date], existing: String?, example: (top: String, under: String), sample: String? = nil) -> PreRunQuestion? {
         if let e = existing {
             return PreRunQuestion(key: "date", title: "", message: "", icon: "", options: [], preset: e, remember: { _ in })
         }
@@ -441,7 +810,9 @@ final class Sorter: ObservableObject {
             options: [QuestionOption(id: "top", label: "Ja, Tagesordner oben", detail: example.top),
                       QuestionOption(id: "under", label: "Ja, Tagesordner unter der Kamera", detail: example.under),
                       QuestionOption(id: "off", label: "Nein", detail: "Alle Tage zusammen")],
-            preset: preset, remember: { [weak self] a in self?.store.dateMode = a })
+            preset: preset, remember: { [weak self] a in self?.store.dateMode = a },
+            example: sample, recommended: "under",
+            reason: "Clips von \(days.count) Tagen – so bleibt die Kamera oben und jeder Tag ist schnell gefunden.")
     }
 
     func answerDuplicate(_ choice: DupChoice, forAll: Bool) {
@@ -454,7 +825,11 @@ final class Sorter: ObservableObject {
         guard let p = pendingCamera else { return }
         pendingCamera = nil
         let clean = name.map { Self.clean($0) }.flatMap { $0.isEmpty ? nil : $0 }
-        if let c = clean, remember { store.learn(signature: p.signature, label: p.signatureLabel, camera: c) }
+        if let c = clean, remember {
+            let st = store, sig = p.signature, lab = p.signatureLabel
+            if executionConfirmed { st.learn(signature: sig, label: lab, camera: c) }
+            else { pendingLearn.append { st.learn(signature: sig, label: lab, camera: c) } }
+        }
         p.continuation.resume(returning: clean)
     }
 
@@ -470,7 +845,11 @@ final class Sorter: ObservableObject {
     func answerExtensions(_ map: [String: FileCategory]?, remember: Bool) {
         guard let p = pendingExtensions else { return }
         pendingExtensions = nil
-        if let m = map, remember { for (e, c) in m { store.learnExtension(e, as: c) } }
+        if let m = map, remember {
+            let st = store
+            if executionConfirmed { for (e, c) in m { st.learnExtension(e, as: c) } }
+            else { pendingLearn.append { for (e, c) in m { st.learnExtension(e, as: c) } } }
+        }
         p.continuation.resume(returning: map)
     }
 
@@ -576,22 +955,24 @@ final class Sorter: ObservableObject {
         if cfg.compactLayout {
             total = videos.count + others.count
             phase = .sorting
-            guard await layoutCompact(videos, siblings: siblings) else { phase = .cancelled; return }
-            for job in others {
-                if Task.isCancelled { phase = .cancelled; return }
-                currentFile = job.url.lastPathComponent
-                guard fm.fileExists(atPath: job.url.path) else { processed += 1; continue }
+            // Ziele der übrigen Dateien vorab berechnen (für die Übersicht vor dem ersten Verschieben)
+            var oPlan: [(url: URL, target: URL, counter: MoveCounter)] = []
+            for job in others where fm.fileExists(atPath: job.url.path) {
                 let dreh = Self.drehRoot(job.dir)
                 switch job.cat {
-                case .side:
-                    if await move(job.url, to: dreh.appendingPathComponent(FolderNames.side)) { sideCounts[job.ext.uppercased(), default: 0] += 1 }
-                case .photo:
-                    if await move(job.url, to: dreh.appendingPathComponent(FolderNames.photos)) { counts["Fotos", default: 0] += 1 }
+                case .side: oPlan.append((job.url, dreh.appendingPathComponent(FolderNames.side), .side(job.ext.uppercased())))
+                case .photo: oPlan.append((job.url, dreh.appendingPathComponent(FolderNames.photos), .photo))
                 case .music, .archive, .project:
                     let folder = job.cat.folder ?? "Sonstiges"
-                    if await move(job.url, to: dreh.appendingPathComponent(FolderNames.extras).appendingPathComponent(folder)) { sideCounts[folder, default: 0] += 1 }
+                    oPlan.append((job.url, dreh.appendingPathComponent(FolderNames.extras).appendingPathComponent(folder), .side(folder)))
                 default: break
                 }
+            }
+            guard await layoutCompact(videos, siblings: siblings, extra: oPlan.map { ($0.url, $0.target) }) else { phase = .cancelled; return }
+            for o in oPlan {
+                if Task.isCancelled || safetyStop { phase = .cancelled; return }
+                currentFile = o.url.lastPathComponent
+                if fm.fileExists(atPath: o.url.path), await move(o.url, to: o.target) { tally(o.counter) }
                 processed += 1
             }
             currentFile = ""
@@ -602,10 +983,12 @@ final class Sorter: ObservableObject {
         total = jobs.count
         phase = .sorting
 
+        // Phase 1: Ziele berechnen (Kameras sind schon vorab erfragt) – noch nichts verschieben
+        var plan: [(url: URL, target: URL, counter: MoveCounter)] = []
         for job in jobs {
             if Task.isCancelled { phase = .cancelled; return }
             currentFile = job.url.lastPathComponent
-            guard fm.fileExists(atPath: job.url.path) else { processed += 1; continue }
+            guard fm.fileExists(atPath: job.url.path) else { continue }
 
             switch job.cat {
             case .video:
@@ -616,8 +999,8 @@ final class Sorter: ObservableObject {
                 }
                 if cam.hasPrefix(LearnedStore.folderPrefix) {
                     let f = String(cam.dropFirst(LearnedStore.folderPrefix.count))
-                    if await move(job.url, to: job.dir.appendingPathComponent(f)) { sideCounts[f, default: 0] += 1 }
-                    processed += 1; continue
+                    plan.append((job.url, job.dir.appendingPathComponent(f), .side(f)))
+                    continue
                 }
                 var target = job.dir.appendingPathComponent("Videos").appendingPathComponent(cam)
                 if cfg.sortByLens {
@@ -653,21 +1036,26 @@ final class Sorter: ObservableObject {
                 }
                 if let o { target = target.appendingPathComponent(o) }
                 else { hints.append("\(job.url.lastPathComponent): Ausrichtung nicht lesbar – liegt direkt in Videos/\(cam)") }
-                if await move(job.url, to: target) {
-                    movedVideos += 1
-                    counts[o ?? "Video", default: 0] += 1
-                    cameras[cam, default: 0] += 1
-                }
+                plan.append((job.url, target, .video(o, cam)))
             case .side:
                 let key = job.ext.uppercased()
-                if await move(job.url, to: job.dir.appendingPathComponent(key)) { sideCounts[key, default: 0] += 1 }
+                plan.append((job.url, job.dir.appendingPathComponent(key), .side(key)))
             case .photo:
-                if await move(job.url, to: job.dir.appendingPathComponent("Fotos")) { counts["Fotos", default: 0] += 1 }
+                plan.append((job.url, job.dir.appendingPathComponent("Fotos"), .photo))
             case .music, .archive, .project:
                 let folder = job.cat.folder ?? "Sonstiges"
-                if await move(job.url, to: job.dir.appendingPathComponent(folder)) { sideCounts[folder, default: 0] += 1 }
+                plan.append((job.url, job.dir.appendingPathComponent(folder), .side(folder)))
             case .ignore: break
             }
+        }
+        currentFile = ""
+        // Phase 2: Übersicht, dann verschieben
+        guard await confirmOverview(plan.map { ($0.url, $0.target) }) else { phase = .cancelled; return }
+        total = plan.count; processed = 0
+        for st in plan {
+            if Task.isCancelled || safetyStop { phase = .cancelled; return }
+            currentFile = st.url.lastPathComponent
+            if fm.fileExists(atPath: st.url.path), await move(st.url, to: st.target) { tally(st.counter) }
             processed += 1
         }
         currentFile = ""
@@ -675,13 +1063,15 @@ final class Sorter: ObservableObject {
 
     /// Unbekannte Dateitypen einmal abfragen. nil = abgebrochen.
     private func askUnknown(_ unknown: [String: (example: String, count: Int)]) async -> [String: FileCategory]? {
-        guard !unknown.isEmpty else { return [:] }
-        let list = unknown.map { (ext: $0.key, example: $0.value.example, count: $0.value.count) }.sorted { $0.ext < $1.ext }
+        let rest = unknown.filter { sessionExt[$0.key] == nil }   // in der Fragenrunde schon beantwortet → nicht erneut fragen
+        guard !rest.isEmpty else { return sessionExt }
+        let list = rest.map { (ext: $0.key, example: $0.value.example, count: $0.value.count) }.sorted { $0.ext < $1.ext }
         let answer: [String: FileCategory]? = await withCheckedContinuation { c in
             pendingExtensions = ExtensionRequest(extensions: list, continuation: c)
         }
         if Task.isCancelled { return nil }
-        return answer ?? [:]
+        for (k, v) in answer ?? [:] { sessionExt[k] = v }
+        return sessionExt
     }
 
     // MARK: Kompakte Struktur
@@ -791,7 +1181,7 @@ final class Sorter: ObservableObject {
             else {
                 r = withVideos
                 if !hints.contains(where: { $0.hasPrefix("Videos-Sammelordner trotzdem") }) {
-                    hints.append("Videos-Sammelordner trotzdem angelegt: Ohne Ebene Ausrichtung, Bildrate oder Szene wäre beim nächsten Lauf nicht erkennbar, was schon sortiert ist.")
+                    hints.append("Videos-Sammelordner trotzdem angelegt: Ohne Ebene Ausrichtung, Framerate oder Szene wäre beim nächsten Lauf nicht erkennbar, was schon sortiert ist.")
                 }
             }
         }
@@ -889,7 +1279,16 @@ final class Sorter: ObservableObject {
 
     private func writeLayout(_ sig: LayoutSig, to dreh: URL) {
         guard let d = try? JSONEncoder().encode(sig) else { return }
-        try? d.write(to: dreh.appendingPathComponent(Self.layoutMarker), options: .atomic)
+        _ = writeLogged(d, to: dreh.appendingPathComponent(Self.layoutMarker))
+    }
+
+    /// CamSorts unsichtbare Markierungsdateien schreiben – mit Protokoll (vorheriger Inhalt für Rückgängig). Gleicher Inhalt → nichts tun.
+    private func writeLogged(_ data: Data, to u: URL) -> Bool {
+        let prev = try? Data(contentsOf: u)
+        if prev == data { return true }
+        let n = j.plan("markierung", u, nil, data: prev?.base64EncodedString())
+        do { try data.write(to: u, options: .atomic); j.done(n); return true }
+        catch { j.fail(n, error.localizedDescription); return false }
     }
 
     /// Schon einsortierte Clips eines Drehs (unter Videos bzw. in den Ebenen-Ordnern), inkl. Stabilisiert/Original
@@ -946,7 +1345,7 @@ final class Sorter: ObservableObject {
     }
 
     /// Analysiert alle Videos je Dreh und legt nur die Ordner an, die sich dort unterscheiden.
-    private func layoutCompact(_ videos: [Job], siblings: [URL: Set<String>]) async -> Bool {
+    private func layoutCompact(_ videos: [Job], siblings: [URL: Set<String>], extra: [(URL, URL)] = []) async -> Bool {
         var lv = cfg.levels
         var infos: [CInfo] = []
         for job in videos {
@@ -1077,9 +1476,9 @@ final class Sorter: ObservableObject {
             for c in changed where !changedDrehs.contains(where: { pk($0) == pk(c.dreh) }) { changedDrehs.append(c.dreh) }
             // Struktur passt schon zu den Einstellungen → nur Layout-Datei schreiben, nicht fragen
             for d in candidates where !changedDrehs.contains(where: { pk($0) == pk(d) }) {
-                writeLayout(LayoutSig(version: 1, useVideos: videosRoot(d).standardizedFileURL.path != d.standardizedFileURL.path,
+                layoutWrites.append((LayoutSig(version: 1, useVideos: videosRoot(d).standardizedFileURL.path != d.standardizedFileURL.path,
                                       videosName: FolderNames.videos, levels: cfg.levels, configLevels: cfg.levels,
-                                      nest: cfg.nestLevels, separator: FolderNames.separator, declined: nil), to: d)
+                                      nest: cfg.nestLevels, separator: FolderNames.separator, declined: nil), d))
             }
             if !changed.isEmpty {
                 func rel(_ u: URL, _ d: URL) -> String { String(u.standardizedFileURL.path.dropFirst(d.standardizedFileURL.path.count + 1)) }
@@ -1093,7 +1492,10 @@ final class Sorter: ObservableObject {
                     icon: "arrow.triangle.branch",
                     options: [QuestionOption(id: "reorder", label: "Neu ordnen", detail: ex.first ?? ""),
                               QuestionOption(id: "keep", label: "So lassen, nur neue Dateien einsortieren", detail: "Bisherige Struktur bleibt")],
-                    preset: nil, remember: { _ in })
+                    preset: nil, remember: { _ in },
+                    example: changed.first.map { "\($0.info.job.url.lastPathComponent) → \(relPath(finalDir($0)))" },
+                    recommended: "reorder",
+                    reason: "Dann ist alles einheitlich nach den aktuellen Einstellungen – es wird nur verschoben und ist rückgängig machbar.")
                 guard let a = await resolve([q]) else { return false }
                 if a["reorder"] == "reorder" {
                     reorder = changedDrehs
@@ -1115,9 +1517,11 @@ final class Sorter: ObservableObject {
             let day = store.dayString(Date())
             let vp = wantsVideosFolder ? "\(FolderNames.videos)/" : ""
             var choice: String? = existing
+            let sample = infos.first { !$0.old } ?? infos.first
+            let sampleText = sample.map { i in "\(i.job.url.lastPathComponent) (\(store.dayString(i.start))) → \(drehOf(i).lastPathComponent)/\(vp)\(i.cam)/\(store.dayString(i.start))/…" }
             if existing == nil && (hasNew || !reorder.isEmpty) && projectsNeedDate(infos.map { ($0.job.url, $0.start) }),
                let q = dateQuestion(starts: infos.map(\.start), existing: nil,
-                                    example: ("\(vp)\(day)/Kamera/…", "\(vp)Kamera/\(day)/…")) {
+                                    example: ("\(vp)\(day)/Kamera/…", "\(vp)Kamera/\(day)/…"), sample: sampleText) {
                 guard let a = await resolve([q]) else { return false }
                 choice = a["date"]
             }
@@ -1128,7 +1532,7 @@ final class Sorter: ObservableObject {
             default: break
             }
         }
-        // Rückfrage: verschiedene Bildraten → auch nach FPS sortieren? Vorhandene FPS-Ordner → ohne Frage weiterführen (außer beim Neu-Ordnen).
+        // Rückfrage: verschiedene Frameraten → auch nach FPS sortieren? Vorhandene FPS-Ordner → ohne Frage weiterführen (außer beim Neu-Ordnen).
         if !lv.contains("fps") && !infos.isEmpty {
             let drehs = infos.map(drehOf).filter { d in !reorder.contains(where: { pk($0) == pk(d) }) }
             if drehs.contains(where: { hasFpsFolders(videosRoot($0)) }) {
@@ -1136,19 +1540,25 @@ final class Sorter: ObservableObject {
             } else {
                 let fresh = infos.filter { !$0.fps.isEmpty }
                 let ex = LearnedStore.insertingFps(into: lv).map { LevelBuilder.sample($0, store) }
-                if let q = fpsQuestion(fresh.map(\.fps), example: (wantsVideosFolder ? "\(FolderNames.videos)/" : "") + (cfg.nestLevels ? ex.joined(separator: "/") : ex.joined(separator: FolderNames.separator)) + "/…") {
+                let fs = fresh.first { $0.fps != fresh.first?.fps } ?? fresh.first
+                let fsText = fs.map { "\($0.job.url.lastPathComponent) → \(drehOf($0).lastPathComponent)/\(wantsVideosFolder ? FolderNames.videos + "/" : "")\($0.cam)/\($0.fps)/…" }
+                if let q = fpsQuestion(fresh.map(\.fps), example: (wantsVideosFolder ? "\(FolderNames.videos)/" : "") + (cfg.nestLevels ? ex.joined(separator: "/") : ex.joined(separator: FolderNames.separator)) + "/…", sample: fsText) {
                     guard let a = await resolve([q]) else { return false }
                     if a["fps"] == "yes" { lv = LearnedStore.insertingFps(into: lv) }
                 }
             }
         }
 
-        // Verschieben – nur, was nicht schon am Ziel liegt
+        // Verschieben – nur, was nicht schon am Ziel liegt. Vorher Übersicht (alle Fragen sind jetzt beantwortet).
         let steps = plan(infos, levels: lv, root: { d in self.videosRoot(d) })
+        let moves: [(URL, URL)] = steps.filter { here($0.info) != finalDir($0).standardizedFileURL.path }.map { ($0.info.job.url, finalDir($0)) }
+        guard await confirmOverview(moves + extra) else { return false }
+        for (sig, d) in layoutWrites { writeLayout(sig, to: d) }
+        layoutWrites = []
         total += oldInfos.isEmpty ? 0 : infos.filter(\.old).count
         var reordered = 0
         for p in steps {
-            if Task.isCancelled { return false }
+            if Task.isCancelled || safetyStop { return false }
             let i = p.info
             currentFile = i.job.url.lastPathComponent
             var tags: [String] = [i.cam]
@@ -1201,7 +1611,7 @@ final class Sorter: ObservableObject {
                 let old = oldTops.filter { pk($0.deletingLastPathComponent()) == pk(dreh) }
                 for u in kids.filter(FolderNames.isVideos).map({ dreh.appendingPathComponent($0) }) + old {
                     removeEmptyDirs(u)
-                    if ((try? fm.contentsOfDirectory(atPath: u.path)) ?? ["x"]).filter({ $0 != ".DS_Store" }).isEmpty { try? fm.removeItem(at: u) }
+                    removeEmptyDir(u)   // nur wenn wirklich leer (höchstens .DS_Store)
                 }
             }
             // Layout-Datei: beschreibt, mit welchen Einstellungen dieser Dreh sortiert ist
@@ -1259,9 +1669,12 @@ final class Sorter: ObservableObject {
             var preset: String? = store.renameMode == "ask" ? nil : store.renameMode
             if let p = preset, !multi { preset = p.replacingOccurrences(of: "-range", with: "-start") }
             let q = PreRunQuestion(key: "rename", title: "Datum in den Ordnernamen übernehmen?",
-                                   message: "„\(name)“ hat noch kein Datum im Namen. Frühestes Aufnahmedatum der Clips: \(startL)." + (multi ? " Aufnahmen bis \(store.dayString(b))." : ""),
+                                   message: "„\(name)“ hat noch kein Datum im Namen. Frühestes Aufnahmedatum der Clips: \(startL)." + (multi ? " Aufnahmen bis \(store.dayString(b))." : "") + " Nur der Ordner wird umbenannt, keine Datei.",
                                    icon: "calendar.badge.plus", options: opts, preset: preset,
-                                   remember: { [weak self] v in self?.store.renameMode = v })
+                                   remember: { [weak self] v in self?.store.renameMode = v },
+                                   example: "\(name) → \(multi ? rangeL : startL) \(name)",
+                                   recommended: multi ? "front-range" : "front-start",
+                                   reason: "Datum vorne sortiert die Drehs im Finder automatisch chronologisch.")
             guard let ans = await resolve([q]) else { phase = .cancelled; return }
             let choice = ans["rename"] ?? "off"
             guard choice != "off" else { continue }
@@ -1271,11 +1684,21 @@ final class Sorter: ObservableObject {
             if fm.fileExists(atPath: dst.path) {
                 hints.append("„\(name)“ nicht umbenannt: „\(newName)“ gibt es dort schon"); continue
             }
+            let n = j.plan("umbenennen", cur, dst)
             do { try fm.moveItem(at: cur, to: dst) }
             catch {
+                j.fail(n, error.localizedDescription)
                 problems.append("„\(name)“ konnte nicht in „\(newName)“ umbenannt werden (geöffnet, gesperrt oder schreibgeschützt?): \(error.localizedDescription)")
                 continue
             }
+            guard fm.fileExists(atPath: dst.path) && !fm.fileExists(atPath: cur.path) else {
+                j.fail(n, "Prüfung nach dem Umbenennen fehlgeschlagen")
+                stopForSafety("„\(name)“: Prüfung nach dem Umbenennen fehlgeschlagen – Lauf gestoppt")
+                return
+            }
+            j.done(n)
+            j.rebase(from: cur, to: dst)
+            Self.selectedBases = Set(Self.selectedBases.map { Self.rewrite(URL(fileURLWithPath: $0), from: cur, to: dst).standardizedFileURL.path })
             hints.append("Ordner umbenannt: „\(name)“ → „\(newName)“")
             // alle gemerkten Pfade nachziehen
             folders = folders.map { Self.rewrite($0, from: cur, to: dst) }
@@ -1324,30 +1747,89 @@ final class Sorter: ObservableObject {
         var dirs: [URL] = []
         while let u = en.nextObject() as? URL { if (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { dirs.append(u) } }
         for d in dirs.sorted(by: { $0.path.count > $1.path.count }) {
-            let items = (try? fm.contentsOfDirectory(atPath: d.path))?.filter { $0 != ".DS_Store" } ?? ["x"]
-            if items.isEmpty { try? fm.removeItem(at: d) }   // nur wirklich leere Ordner
+            removeEmptyDir(d)   // nur wirklich leere Ordner (höchstens .DS_Store), mit Protokoll
         }
     }
 
     // MARK: Verschieben
 
+    /// Sicheres Verschieben: nur innerhalb desselben Laufwerks (atomares Umbenennen, nie Kopieren + Löschen),
+    /// vorher/nachher protokolliert, danach geprüft (Ziel da, Größe gleich, Quelle weg) – sonst sofortiger Stopp.
     private func move(_ src: URL, to dir: URL) async -> Bool {
         let name = src.lastPathComponent
-        do { try fm.createDirectory(at: dir, withIntermediateDirectories: true) }
-        catch { problems.append("\(name): Zielordner konnte nicht angelegt werden (\(error.localizedDescription))"); return false }
+        if safetyStop { return false }
+        guard Safety.sameVolume(src, dir) else {
+            problems.append("\(name): Ziel liegt auf einem anderen Laufwerk – nicht verschoben (CamSort kopiert beim Sortieren nie)")
+            return false
+        }
+        guard ensureDir(dir) else { problems.append("\(name): Zielordner konnte nicht angelegt werden"); return false }
 
         var dst = dir.appendingPathComponent(name)
         if fm.fileExists(atPath: dst.path) {
+            if Safety.sameFile(src, dst) { return true }   // liegt schon dort (nur andere Groß-/Kleinschreibung)
             switch await askDuplicate(name: name, folder: dir.path) {
             case .skip: skipped += 1; return false
             case .keepBoth: dst = freeURL(in: dir, for: name)
             case .replace:
-                do { try fm.trashItem(at: dst, resultingItemURL: nil) }
-                catch { problems.append("\(name): alte Datei ließ sich nicht in den Papierkorb legen"); return false }
+                guard trashLogged(dst) else { problems.append("\(name): alte Datei ließ sich nicht in den Papierkorb legen"); return false }
             }
         }
-        do { try fm.moveItem(at: src, to: dst); return true }
-        catch { problems.append("\(name): konnte nicht verschoben werden (\(error.localizedDescription))"); return false }
+        if safetyStop { return false }
+        let size = Safety.itemSize(src)
+        let n = j.plan("verschieben", src, dst, size: size)
+        do { try fm.moveItem(at: src, to: dst) }
+        catch {
+            j.fail(n, error.localizedDescription)
+            problems.append("\(name): konnte nicht verschoben werden (\(error.localizedDescription))")
+            return false
+        }
+        guard fm.fileExists(atPath: dst.path) && !fm.fileExists(atPath: src.path) && Safety.itemSize(dst) == size else {
+            j.fail(n, "Prüfung nach dem Verschieben fehlgeschlagen")
+            stopForSafety("\(name): Nach dem Verschieben stimmt etwas nicht (Ziel fehlt, Größe anders oder Quelle noch da) – Lauf sofort gestoppt. Nichts wurde gelöscht; „Rückgängig machen“ ist verfügbar.")
+            return false
+        }
+        j.done(n)
+        return true
+    }
+
+    /// Fehlende Ordner einzeln anlegen und protokollieren (Rückgängig entfernt sie wieder, wenn sie leer sind)
+    private func ensureDir(_ dir: URL) -> Bool {
+        var missing: [URL] = []
+        var cur = dir.standardizedFileURL
+        var isDir: ObjCBool = false
+        while !fm.fileExists(atPath: cur.path, isDirectory: &isDir) {
+            missing.insert(cur, at: 0)
+            let p = cur.deletingLastPathComponent()
+            if p.path == cur.path { return false }
+            cur = p
+        }
+        guard isDir.boolValue else { return false }
+        for d in missing {
+            let n = j.plan("ordner-anlegen", nil, d)
+            do { try fm.createDirectory(at: d, withIntermediateDirectories: false); j.done(n) }
+            catch { j.fail(n, error.localizedDescription); return false }
+        }
+        return true
+    }
+
+    /// „Ersetzen“ bei Duplikat: alte Datei nur in den Papierkorb, Ablageort im Protokoll
+    private func trashLogged(_ u: URL) -> Bool {
+        let n = j.plan("papierkorb", u, nil, size: Safety.itemSize(u))
+        var res: NSURL?
+        do {
+            try fm.trashItem(at: u, resultingItemURL: &res)
+            j.done(n, dst: res.map { $0 as URL })
+            return true
+        } catch { j.fail(n, error.localizedDescription); return false }
+    }
+
+    /// Entfernt NUR leere Ordner (höchstens .DS_Store) – nie eine Datei. Mit Protokoll.
+    @discardableResult
+    private func removeEmptyDir(_ u: URL) -> Bool {
+        guard Safety.isEmptyDir(u) else { return false }
+        let n = j.plan("ordner-loeschen", u, nil)
+        do { try fm.removeItem(at: u); j.done(n); return true }
+        catch { j.fail(n, error.localizedDescription); return false }
     }
 
     private func askDuplicate(name: String, folder: String) async -> DupChoice {
@@ -1374,7 +1856,7 @@ final class Sorter: ObservableObject {
 
     private func orientation(of asset: AVURLAsset) async -> String? { await videoProps(of: asset).orient }
 
-    /// Ausrichtung und nominale Bildrate in EINEM Ladevorgang der Videospur (keine doppelte Analyse pro Datei)
+    /// Ausrichtung und nominale Framerate in EINEM Ladevorgang der Videospur (keine doppelte Analyse pro Datei)
     private func videoProps(of asset: AVURLAsset) async -> (orient: String?, nominalFps: Double) {
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
               let props = try? await track.load(.naturalSize, .preferredTransform, .nominalFrameRate) else { return (nil, 0) }
@@ -1382,10 +1864,10 @@ final class Sorter: ObservableObject {
         return (FolderNames.orientation(width: Double(abs(r.width)), height: Double(abs(r.height))), Double(props.2))
     }
 
-    // MARK: Bildrate
+    // MARK: Framerate
 
     /// Sony-Zeitlupe (S&Q): nominal z. B. 25p, aufgenommen mit 100p. Steht im NRT-XML als
-    /// <VideoFrame … captureFps="100p" formatFps="25p">. Liefert die Aufnahme-Bildrate oder nil.
+    /// <VideoFrame … captureFps="100p" formatFps="25p">. Liefert die Aufnahme-Framerate oder nil.
     nonisolated static func captureFps(fromXML s: String) -> Double? {
         guard let tagR = s.range(of: #"<VideoFrame[^>]*>"#, options: .regularExpression) else { return nil }
         let tag = String(s[tagR])
@@ -1394,7 +1876,7 @@ final class Sorter: ObservableObject {
         return v.flatMap { $0 > 0 ? $0 : nil }
     }
 
-    /// FPS-Ordnername für einen Clip: Sony-Aufnahme-FPS (captureFps), sonst nominale Bildrate der Videospur.
+    /// FPS-Ordnername für einen Clip: Sony-Aufnahme-FPS (captureFps), sonst nominale Framerate der Videospur.
     private func fpsFolder(for url: URL, nominal: Double, bytes: Data? = nil) -> String {
         let stem = url.deletingPathExtension().lastPathComponent
         var fps = nominal
@@ -1404,8 +1886,8 @@ final class Sorter: ObservableObject {
         return FolderNames.fpsName(FolderNames.fpsClass(fps))
     }
 
-    /// Frage „Auch nach Bildrate sortieren?“ – nur bei mindestens zwei verschiedenen Bildraten. nil = nicht fragen (Antwort „no“).
-    func fpsQuestion(_ names: [String], example pos: String) -> PreRunQuestion? {
+    /// Frage „Auch nach Framerate sortieren?“ – nur bei mindestens zwei verschiedenen Frameraten. nil = nicht fragen (Antwort „no“).
+    func fpsQuestion(_ names: [String], example pos: String, sample: String? = nil) -> PreRunQuestion? {
         guard store.fpsMode != "off" else { return nil }
         var count: [String: Int] = [:]
         for n in names { count[n, default: 0] += 1 }
@@ -1413,16 +1895,18 @@ final class Sorter: ObservableObject {
         func num(_ k: String) -> Int { Int(k.prefix { $0.isNumber }) ?? Int.max }
         let list = count.keys.sorted { (num($0), $0) < (num($1), $1) }.map { "\($0): \(count[$0]!)" }.joined(separator: ", ")
         return PreRunQuestion(
-            key: "fps", title: "Auch nach Bildrate sortieren?",
-            message: "Die Clips haben unterschiedliche Bildraten (\(list)).",
+            key: "fps", title: "Auch nach Framerate sortieren?",
+            message: "Die Clips haben unterschiedliche Frameraten (\(list)).",
             icon: "speedometer",
             options: [QuestionOption(id: "yes", label: "Ja, unter der Kamera", detail: pos),
-                      QuestionOption(id: "no", label: "Nein", detail: "Alle Bildraten zusammen")],
+                      QuestionOption(id: "no", label: "Nein", detail: "Alle Frameraten zusammen")],
             preset: nil,
             remember: { [weak self] a in
                 guard let self else { return }
                 if a == "yes" { self.store.levels = LearnedStore.insertingFps(into: self.store.levels) } else { self.store.fpsMode = "off" }
-            })
+            },
+            example: sample, recommended: "yes",
+            reason: "\(count.count) Frameraten kommen vor – Zeitlupen-Clips liegen dann getrennt und sind im Schnitt sofort zu finden.")
     }
 
     /// Gibt es unter `root` (bis 4 Ebenen tief) schon FPS-Ordner? Dann Struktur ohne Frage weiterführen.
@@ -1903,14 +2387,17 @@ extension Sorter {
         if cfg.levels.contains("date") { dateChoice = existing ?? "under" }
         else if !projectsNeedDate(infos.map { ($0.v.url, $0.start) }) { dateChoice = "off" }
         else if let q = dateQuestion(starts: infos.map(\.start), existing: existing,
-                                     example: ("Dreh/\(store.dayString(Date()))/A1/Hochkant", "Dreh/A1/\(store.dayString(Date()))/Hochkant")) {
+                                     example: ("Dreh/\(store.dayString(Date()))/A1/Hochkant", "Dreh/A1/\(store.dayString(Date()))/Hochkant"),
+                                     sample: infos.first.map { "\($0.v.url.lastPathComponent) (\(store.dayString($0.start))) → \(relPath($0.v.cam))/\(store.dayString($0.start))/\($0.o)" }) {
             guard let a = await resolve([q]) else { phase = .cancelled; return }
             dateChoice = a["date"] ?? "off"
         }
-        // Bildrate: vorhandene FPS-Ordner weiterführen, sonst nur bei mehreren Bildraten fragen. Position: als letzte Zusatzebene, direkt über Hochkant/Quer.
+        // Framerate: vorhandene FPS-Ordner weiterführen, sonst nur bei mehreren Frameraten fragen. Position: als letzte Zusatzebene, direkt über Hochkant/Quer.
         if !extras.contains("fps") && !infos.isEmpty {
             var on = ownCams.contains { hasFpsFolders($0.url) }
-            if !on, let q = fpsQuestion(infos.map(\.fps), example: "A1/" + (extras.isEmpty ? "" : "…/") + "\(infos[0].fps)/Hochkant") {
+            let fs = infos.first { $0.fps != infos[0].fps } ?? infos[0]
+            if !on, let q = fpsQuestion(infos.map(\.fps), example: "A1/" + (extras.isEmpty ? "" : "…/") + "\(infos[0].fps)/Hochkant",
+                                        sample: "\(fs.v.url.lastPathComponent) → \(relPath(fs.v.cam))/\(fs.fps)/\(fs.o)") {
                 guard let a = await resolve([q]) else { phase = .cancelled; return }
                 on = a["fps"] == "yes"
             }
@@ -1931,13 +2418,12 @@ extension Sorter {
         }
         var rootOfStem: [String: [(stem: String, root: URL)]] = [:]   // Begleitdateien folgen ihrem Clip
 
-        // 3c) Videos verschieben: <Wurzel>/[Zusatzebenen]/Hochkant|Quer
+        // 3c) Ziele berechnen (noch nichts verschieben): <Wurzel>/[Zusatzebenen]/Hochkant|Quer
+        struct VStep { let i: VInfo; let dir: URL; let target: URL }
+        var vPlan: [VStep] = []
         for i in infos {
-            if Task.isCancelled { phase = .cancelled; return }
             let v = i.v
-            currentFile = v.url.lastPathComponent
-            defer { processed += 1 }
-            guard fm.fileExists(atPath: v.url.path) else { continue }
+            guard fm.fileExists(atPath: v.url.path) else { processed += 1; continue }
             let dir = v.url.deletingLastPathComponent()
             let base = root(for: v.cam, day: store.dayString(i.start))
             rootOfStem[v.cam.path, default: []].append((stem: v.url.deletingPathExtension().lastPathComponent, root: base))
@@ -1945,26 +2431,14 @@ extension Sorter {
             if cfg.nestLevels { for p in i.parts { target = childDir(target, p) } }
             else if !i.parts.isEmpty { target = childDir(target, i.parts.joined(separator: FolderNames.separator)) }
             target = childDir(target, i.o)
-            if samePath(dir, target) { continue }
-            if await move(v.url, to: target) {
-                movedVideos += 1
-                counts[i.o, default: 0] += 1
-                cameras[v.cam.lastPathComponent, default: 0] += 1
-                for p in i.parts where ["Stand", "Fahrt", "Dazwischen", "Ohne GPS"].contains(p) { speeds[p, default: 0] += 1 }
-                if extras.contains("lens"), let li = extras.firstIndex(of: "lens"), li < i.parts.count { lenses[i.parts[li], default: 0] += 1 }
-                if i.o == FolderNames.portrait { stats[v.cam.path]?.hochkant += 1 }
-                else if i.o == FolderNames.landscape { stats[v.cam.path]?.quer += 1 } else { stats[v.cam.path]?.quadrat += 1 }
-                _ = TagRunner.addFinderTags([v.cam.lastPathComponent, i.o], to: target.appendingPathComponent(v.url.lastPathComponent))
-                emptied.insert(dir)
-            }
+            if samePath(dir, target) { processed += 1; continue }
+            vPlan.append(VStep(i: i, dir: dir, target: target))
         }
-
         // 4) Alles andere bleibt im Kameraordner: Begleitdateien, Fotos, Extras/<Musik|ZIP|FCP>
+        struct OStep { let f: Item; let cat: FileCategory; let dir: URL; let target: URL; let key: String }
+        var oPlan: [OStep] = []
         for (f, cat) in others {
-            if Task.isCancelled { phase = .cancelled; return }
-            currentFile = f.url.lastPathComponent
-            defer { processed += 1 }
-            guard fm.fileExists(atPath: f.url.path) else { continue }
+            guard fm.fileExists(atPath: f.url.path) else { processed += 1; continue }
             let dir = f.url.deletingLastPathComponent()
             let target: URL
             let key: String
@@ -1982,13 +2456,43 @@ extension Sorter {
             case .music, .archive, .project:
                 let folder = cat.folder ?? "Sonstiges"
                 target = childDir(childDir(f.cam, FolderNames.extras), folder); key = folder
-            default: continue
+            default: processed += 1; continue
             }
-            if samePath(dir, target) { continue }
-            if await move(f.url, to: target) {
-                if cat == .photo { counts["Fotos", default: 0] += 1 } else { sideCounts[key, default: 0] += 1 }
-                stats[f.cam.path]?.other += 1
-                emptied.insert(dir)
+            if samePath(dir, target) { processed += 1; continue }
+            oPlan.append(OStep(f: f, cat: cat, dir: dir, target: target, key: key))
+        }
+        var overviewMoves: [(URL, URL)] = vPlan.map { ($0.i.v.url, $0.target) }
+        overviewMoves += oPlan.map { ($0.f.url, $0.target) }
+        guard await confirmOverview(overviewMoves) else { phase = .cancelled; return }
+
+        // 4b) Verschieben
+        for st in vPlan {
+            if Task.isCancelled || safetyStop { phase = .cancelled; return }
+            let i = st.i, v = i.v, target = st.target
+            currentFile = v.url.lastPathComponent
+            defer { processed += 1 }
+            guard fm.fileExists(atPath: v.url.path) else { continue }
+            if await move(v.url, to: target) {
+                movedVideos += 1
+                counts[i.o, default: 0] += 1
+                cameras[v.cam.lastPathComponent, default: 0] += 1
+                for p in i.parts where ["Stand", "Fahrt", "Dazwischen", "Ohne GPS"].contains(p) { speeds[p, default: 0] += 1 }
+                if extras.contains("lens"), let li = extras.firstIndex(of: "lens"), li < i.parts.count { lenses[i.parts[li], default: 0] += 1 }
+                if i.o == FolderNames.portrait { stats[v.cam.path]?.hochkant += 1 }
+                else if i.o == FolderNames.landscape { stats[v.cam.path]?.quer += 1 } else { stats[v.cam.path]?.quadrat += 1 }
+                _ = TagRunner.addFinderTags([v.cam.lastPathComponent, i.o], to: target.appendingPathComponent(v.url.lastPathComponent))
+                emptied.insert(st.dir)
+            }
+        }
+        for st in oPlan {
+            if Task.isCancelled || safetyStop { phase = .cancelled; return }
+            currentFile = st.f.url.lastPathComponent
+            defer { processed += 1 }
+            guard fm.fileExists(atPath: st.f.url.path) else { continue }
+            if await move(st.f.url, to: st.target) {
+                if st.cat == .photo { counts["Fotos", default: 0] += 1 } else { sideCounts[st.key, default: 0] += 1 }
+                stats[st.f.cam.path]?.other += 1
+                emptied.insert(st.dir)
             }
         }
         currentFile = ""
@@ -1998,17 +2502,14 @@ extension Sorter {
             guard let cam = cams.first(where: { d.standardizedFileURL.path.hasPrefix($0.standardizedFileURL.path + "/") }) else { continue }
             var cur = d
             while cur.standardizedFileURL.path.count > cam.standardizedFileURL.path.count {
-                let items = ((try? fm.contentsOfDirectory(atPath: cur.path)) ?? ["x"]).filter { $0 != ".DS_Store" }
-                guard items.isEmpty else { break }
-                try? fm.removeItem(at: cur)
+                guard removeEmptyDir(cur) else { break }
                 cur = cur.deletingLastPathComponent()
             }
         }
 
         if dateChoice == "top" {
             for c in ownCams where c.group != nil && !c.inDayFolder {
-                let items = ((try? fm.contentsOfDirectory(atPath: c.url.path)) ?? ["x"]).filter { $0 != ".DS_Store" }
-                if items.isEmpty { try? fm.removeItem(at: c.url) }   // nur wenn wirklich leer
+                removeEmptyDir(c.url)   // nur wenn wirklich leer
             }
         }
 
@@ -2067,6 +2568,13 @@ extension Sorter {
     nonisolated static let projectMarker = ".camsort-projekt"
 
     fileprivate struct PClip { let url: URL; let start: Date; let end: Date; let cam: String }
+    /// Geplante Projekt-Trennung eines eingeworfenen Ordners (ausgeführt erst nach allen Fragen)
+    fileprivate struct SplitPlan {
+        let base: URL
+        let projects: [PProject]
+        let moves: [(src: URL, dir: URL)]
+        let summaries: [ProjectSummary]
+    }
     fileprivate struct PFile { let url: URL; let date: Date? }
     fileprivate final class PProject {
         let url: URL
@@ -2107,8 +2615,9 @@ extension Sorter {
     private func writeMarker(_ m: ProjectMarker, in dir: URL) {
         let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601; enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? enc.encode(m) else { return }
-        do { try data.write(to: dir.appendingPathComponent(Self.projectMarker), options: .atomic) }
-        catch { hints.append("\(dir.lastPathComponent): Projekt-Markierung konnte nicht gespeichert werden – beim nächsten Einlesen wird evtl. erneut gefragt") }
+        if !writeLogged(data, to: dir.appendingPathComponent(Self.projectMarker)) {
+            hints.append("\(dir.lastPathComponent): Projekt-Markierung konnte nicht gespeichert werden – beim nächsten Einlesen wird evtl. erneut gefragt")
+        }
     }
 
     /// Aufnahmezeit inkl. Ende (Start + Dauer)
@@ -2181,6 +2690,7 @@ extension Sorter {
 
     /// Vor dem Sortieren: je gewähltem Ordner prüfen, ob die Clips aus mehreren Projekten stammen. false = abgebrochen.
     /// Bei Trennung werden `folders` durch die Projektordner ersetzt – der normale Ablauf sortiert dann jedes Projekt für sich.
+    /// Nur planen und fragen – verschoben wird erst in executeSplits(), nachdem alle Fragen beantwortet sind.
     func splitProjects() async -> Bool {
         var out: [URL] = []
         for base in folders {
@@ -2188,8 +2698,42 @@ extension Sorter {
             guard let r = await planProjects(base) else { return false }
             for u in r where !out.contains(where: { $0.standardizedFileURL.path == u.standardizedFileURL.path }) { out.append(u) }
         }
-        if out != folders && !out.isEmpty { folders = out }
+        plannedFolders = (out != folders && !out.isEmpty) ? out : []
         return true
+    }
+
+    /// Geplante Projekt-Trennung ausführen (nach Übersicht). false = abgebrochen.
+    func executeSplits() async -> Bool {
+        let all: [(URL, URL)] = splitPlans.flatMap { $0.moves.map { ($0.src, $0.dir) } }
+        let newProjects = splitPlans.flatMap(\.projects).filter { !$0.existing }.count
+        guard await confirmOverview(all, note: newProjects > 0 ? "\n\nZuerst werden \(plural(newProjects, "Projektordner", "Projektordner")) angelegt, danach wird darin sortiert." : "") else { return false }
+        stepLabel = "Projekte anlegen …"
+        for plan in splitPlans {
+            let basePath = plan.base.standardizedFileURL.path
+            var touched = Set<URL>()
+            for p in plan.projects where !p.clips.isEmpty || !p.files.isEmpty || !p.existing {
+                guard ensureDir(p.url) else { problems.append("\(p.url.lastPathComponent): Projektordner konnte nicht angelegt werden"); return false }
+            }
+            for m in plan.moves {
+                if Task.isCancelled || safetyStop { return false }
+                currentFile = m.src.lastPathComponent
+                if await move(m.src, to: m.dir) { touched.insert(m.src.deletingLastPathComponent()) }
+            }
+            for p in plan.projects where fm.fileExists(atPath: p.url.path) { writeMarker(ProjectMarker(name: p.name, start: p.start, end: p.end), in: p.url) }
+            currentFile = ""
+            // leer gewordene Ordner (Kartenstruktur, Kameraordner) entfernen – nur wenn wirklich leer
+            for d in touched.sorted(by: { $0.path.count > $1.path.count }) {
+                var cur = d
+                while cur.standardizedFileURL.path.count > basePath.count && cur.standardizedFileURL.path.hasPrefix(basePath + "/") {
+                    guard removeEmptyDir(cur) else { break }
+                    cur = cur.deletingLastPathComponent()
+                }
+            }
+            projectSummaries += plan.summaries
+        }
+        if !plannedFolders.isEmpty { folders = plannedFolders }
+        splitPlans = []
+        return !safetyStop
     }
 
     private func planProjects(_ base: URL) async -> [URL]? {
@@ -2345,10 +2889,16 @@ extension Sorter {
         // „Immer trennen“ gemerkt: nur fragen, wenn eine Kamera verdächtig isoliert liegt
         let preset: String? = store.projectMode == "always" && suspect == nil ? "split"
                             : store.projectMode == "never" ? "one" : nil
+        let exGroup = groups.count > 1 ? 1 : 0
+        let exClip = groups.indices.contains(exGroup) ? groups[exGroup].sorted { $0.start < $1.start }.first : nil
         let q = PreRunQuestion(key: "project", title: pauses.isEmpty ? "Neues Projekt?" : "Sind das \(groups.count + projects.count) Projekte?",
                                message: msg, icon: "rectangle.split.3x1", options: opts, preset: preset,
                                remember: { [weak self] a in self?.store.projectMode = a == "one" ? "never" : "always" },
-                               fields: fields)
+                               fields: fields,
+                               example: exClip.map { "\($0.url.lastPathComponent) (\(tf.string(from: $0.start))) → \(base.lastPathComponent)/\(dflt[exGroup])/…" },
+                               recommended: suspect != nil ? "split-fix" : "split",
+                               reason: suspect.map { "Kamera \($0.cam) liegt zeitlich allein – vermutlich falsche Kamerauhr." }
+                                   ?? (pauses.first ?? "Die neuen Clips passen zeitlich zu keinem vorhandenen Projekt."))
         var ans: [String: String] = ["project": "split"]
         if !groups.isEmpty {
             guard let a = await resolve([q]) else { return nil }
@@ -2412,43 +2962,28 @@ extension Sorter {
         }
         if undated > 0 { hints.append("\(plural(undated, "Datei", "Dateien")) ohne Datum → \(projects[0].name)") }
 
-        // 5) Verschieben: relative Lage bleibt erhalten (<Eingeworfen>/<Projekt>/[Kamera]/…)
+        // 5) Ziele planen: relative Lage bleibt erhalten (<Eingeworfen>/<Projekt>/[Kamera]/…). Verschoben wird erst nach allen Fragen.
         let basePath = base.standardizedFileURL.path
-        var touched = Set<URL>()
-        stepLabel = "Projekte anlegen …"
+        var moves: [(src: URL, dir: URL)] = []
         for p in projects {
-            let items = p.clips.map(\.url) + p.files
-            if !items.isEmpty || !p.existing { try? fm.createDirectory(at: p.url, withIntermediateDirectories: true) }
-            for u in items {
-                if Task.isCancelled { return nil }
+            for u in p.clips.map(\.url) + p.files {
                 let parent = u.deletingLastPathComponent().standardizedFileURL.path
                 guard parent == basePath || parent.hasPrefix(basePath + "/") else { continue }
                 var target = p.url
                 if selfCam { target = target.appendingPathComponent(base.lastPathComponent) }
                 let rel = String(parent.dropFirst(basePath.count)).split(separator: "/").map(String.init)
                 for r in rel { target = target.appendingPathComponent(r) }
-                currentFile = u.lastPathComponent
-                if await move(u, to: target) { touched.insert(u.deletingLastPathComponent()) }
-            }
-            writeMarker(ProjectMarker(name: p.name, start: p.start, end: p.end), in: p.url)
-        }
-        currentFile = ""
-        // leer gewordene Ordner (Kartenstruktur, Kameraordner) entfernen – nur wenn wirklich leer
-        for d in touched.sorted(by: { $0.path.count > $1.path.count }) {
-            var cur = d
-            while cur.standardizedFileURL.path.count > basePath.count && cur.standardizedFileURL.path.hasPrefix(basePath + "/") {
-                let items = ((try? fm.contentsOfDirectory(atPath: cur.path)) ?? ["x"]).filter { $0 != ".DS_Store" }
-                guard items.isEmpty else { break }
-                try? fm.removeItem(at: cur)
-                cur = cur.deletingLastPathComponent()
+                moves.append((u, target))
             }
         }
+        var sums: [ProjectSummary] = []
         for p in projects {
             let cams = camList(p.clips)
-            projectSummaries.append(ProjectSummary(path: p.url.path, name: p.url.lastPathComponent,
-                                                   range: p.start == .distantPast ? "" : range(p.start, p.end),
-                                                   cams: cams.isEmpty ? "keine neuen Clips" : cams, isNew: !p.existing))
+            sums.append(ProjectSummary(path: p.url.path, name: p.url.lastPathComponent,
+                                       range: p.start == .distantPast ? "" : range(p.start, p.end),
+                                       cams: cams.isEmpty ? "keine neuen Clips" : cams, isNew: !p.existing))
         }
+        splitPlans.append(SplitPlan(base: base, projects: projects, moves: moves, summaries: sums))
         let urls = projects.map(\.url)
         projectRoots += urls
         return urls

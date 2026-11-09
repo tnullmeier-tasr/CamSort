@@ -75,7 +75,7 @@ final class LearnedStore: ObservableObject {
     private var syncing = false
     /// Modus „Meine Kameraordner“: eigene Ordner pro Kamera übernehmen, darin nur Hochkant/Quer
     @Published var ownCameraFolders: Bool { didSet { d.set(ownCameraFolders, forKey: "ownCameraFolders") } }
-    /// Gyroflow: aus dem Preset nur Glättung + dynamisches Zoomen übernehmen; Objektiv, Größe, Bildrate, Codec, Bitrate, Ton pro Clip
+    /// Gyroflow: aus dem Preset nur Glättung + dynamisches Zoomen übernehmen; Objektiv, Größe, Framerate, Codec, Bitrate, Ton pro Clip
     /// (ersetzt das frühere „gyroKeepAspect“). Aus = Preset komplett wie bisher.
     @Published var gyroMatchSource: Bool { didSet { d.set(gyroMatchSource, forKey: "gyroMatchSource") } }
     /// Tagesordner: "ask" (nur fragen, wenn mehrere Tage), "top" (Tag über der Kamera), "under" (Tag unter der Kamera), "off"
@@ -140,7 +140,7 @@ final class LearnedStore: ObservableObject {
         ("orientation", "Hochkant / Quer", "rectangle.portrait.on.rectangle.portrait"),
         ("speed", "Drohne: Stand / Fahrt", "airplane"),
         ("date", "Aufnahmetag (Tagesordner)", "calendar"),
-        ("fps", "Bildrate (FPS)", "speedometer"),
+        ("fps", "Framerate (FPS)", "speedometer"),
     ]
     /// Ebene „fps“ an sinnvoller Stelle einfügen: vor Hochkant/Quer, sonst direkt unter der Kamera (bzw. dem Tag darunter), sonst ans Ende
     static func insertingFps(into lv: [String]) -> [String] {
@@ -153,7 +153,7 @@ final class LearnedStore: ObservableObject {
         } else { l.append("fps") }
         return l
     }
-    /// Rückfrage Bildrate: "ask" (nur fragen, wenn mehrere Bildraten vorkommen) oder "off" (nie fragen). „Immer“ = Ebene im Baukasten aktiv.
+    /// Rückfrage Framerate: "ask" (nur fragen, wenn mehrere Frameraten vorkommen) oder "off" (nie fragen). „Immer“ = Ebene im Baukasten aktiv.
     @Published var fpsMode: String { didSet { d.set(fpsMode, forKey: "fpsMode") } }
     @Published var sceneGapMinutes: Double { didSet { d.set(sceneGapMinutes, forKey: "sceneGapMinutes") } }
     /// Projekte trennen bei auffällig langer Drehpause: "ask" (Vorschlag mit Rückfrage), "always" (immer trennen), "never"
@@ -161,6 +161,8 @@ final class LearnedStore: ObservableObject {
     /// Mindestpause in Minuten, ab der eine Projektgrenze vorgeschlagen wird (30 Min – 12 Std)
     @Published var projectGapMinutes: Double { didSet { d.set(projectGapMinutes, forKey: "projectGapMinutes") } }
     @Published var autoGyro: Bool { didSet { d.set(autoGyro, forKey: "autoGyro") } }
+    /// Datensicherheit: vor dem ersten Verschieben eine Übersicht mit Start/Abbrechen zeigen
+    @Published var showOverview: Bool { didSet { d.set(showOverview, forKey: "showOverview") } }
     @Published var gyroSuffixes: String { didSet { d.set(gyroSuffixes, forKey: "gyroSuffixes") } }
     var gyroSuffixList: [String] {
         gyroSuffixes.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
@@ -177,6 +179,7 @@ final class LearnedStore: ObservableObject {
         moveMin = d.object(forKey: "moveMin") as? Double ?? 5
         moveMax = d.object(forKey: "moveMax") as? Double ?? 100
         autoGyro = d.object(forKey: "autoGyro") as? Bool ?? true
+        showOverview = d.object(forKey: "showOverview") as? Bool ?? true
         groupByScene = d.object(forKey: "groupByScene") as? Bool ?? true
         sceneGapMinutes = d.object(forKey: "sceneGapMinutes") as? Double ?? 5
         projectMode = d.string(forKey: "projectMode") ?? "ask"

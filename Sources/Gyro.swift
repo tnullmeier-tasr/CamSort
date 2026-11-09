@@ -264,7 +264,7 @@ final class GyroRunner: ObservableObject {
     /// Glättung: method, smoothing_params, Horizont-Ausgleich (gehört in Gyroflow zur Glättung);
     /// dynamisches Zoomen: fov, adaptive_zoom_*, max_zoom (Zoom-Grenze), max_zoom_iterations, fixed_zoom, zoom_limit_whole_clip.
     /// Nicht übernommen u. a.: calibration_data (Objektiv), frame_readout_* (kommt vom Objektivprofil),
-    /// lens_correction_amount, video_speed (würde Bildrate/Ton ändern), output (Größe/Codec), synchronization.
+    /// lens_correction_amount, video_speed (würde Framerate/Ton ändern), output (Größe/Codec), synchronization.
     nonisolated static let presetStabilizationKeys: Set<String> = [
         "method", "smoothing_params",
         "horizon_lock_amount", "horizon_lock_roll", "horizon_lock_pitch_enabled", "horizon_lock_pitch",
@@ -304,7 +304,7 @@ final class GyroRunner: ObservableObject {
 
     /// Gyroflow-Ausgabeparameter (-p) passend zum Clip: kodierte Größe (Gyroflow rechnet auf kodierten Pixeln und
     /// übernimmt die Rotation selbst), gleiche Codec-Familie, Bitrate ≈ Quelle, Ton an (Original kopieren, sonst AAC).
-    /// Bildrate: Gyroflow rendert immer mit der Quell-Bildrate (kein -p-Schlüssel dafür nötig).
+    /// Framerate: Gyroflow rendert immer mit der Quell-Framerate (kein -p-Schlüssel dafür nötig).
     nonisolated static func outputParams(for clip: URL) async -> String? {
         let a = AVURLAsset(url: clip)
         guard let found = try? await a.loadTracks(withMediaType: .video), let t = found.first,

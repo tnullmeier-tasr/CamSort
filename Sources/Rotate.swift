@@ -20,7 +20,8 @@ enum LosslessRotate {
     }
 
     /// Dreht um +90° (rechts) oder −90° (links).
-    static func rotate(_ url: URL, clockwise: Bool) throws {
+    /// beforeWrite: bekommt Position und bisherige 36 Byte der Matrix, BEVOR geschrieben wird (für das Bewegungsprotokoll).
+    static func rotate(_ url: URL, clockwise: Bool, beforeWrite: ((UInt64, Data) -> Void)? = nil) throws {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         let fh = try FileHandle(forUpdating: url)
         var closed = false
@@ -69,12 +70,28 @@ enum LosslessRotate {
         var bytes = Data()
         for v in mtx { var be = UInt32(bitPattern: v).bigEndian; bytes.append(Data(bytes: &be, count: 4)) }
 
-        // 3) nur diese 36 Byte überschreiben
+        // 3) nur diese 36 Byte überschreiben (alte Werte vorher ins Protokoll)
+        let oldBytes = m.subdata(in: (m.startIndex + matrixPos)..<(m.startIndex + matrixPos + 36))
+        beforeWrite?(moovOff + UInt64(matrixPos), oldBytes)
         try fh.seek(toOffset: moovOff + UInt64(matrixPos))
         try fh.write(contentsOf: bytes)
         try fh.synchronize()
         try fh.close(); closed = true
         // Datum unverändert lassen (wichtig für Zeitleiste/Sortierung)
+        if let md = attrs[.modificationDate] { try? FileManager.default.setAttributes([.modificationDate: md], ofItemAtPath: url.path) }
+    }
+
+    /// Rückgängig: die protokollierten 36 Byte wieder an ihre Stelle schreiben (Datum bleibt).
+    static func restore(_ url: URL, offset: UInt64, bytes: Data) throws {
+        guard bytes.count == 36 else { throw Err.io("Protokoll-Eintrag unvollständig") }
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let fh = try FileHandle(forUpdating: url)
+        defer { try? fh.close() }
+        let size = try fh.seekToEnd()
+        guard offset + 36 <= size else { throw Err.io("Datei ist kürzer als erwartet") }
+        try fh.seek(toOffset: offset)
+        try fh.write(contentsOf: bytes)
+        try fh.synchronize()
         if let md = attrs[.modificationDate] { try? FileManager.default.setAttributes([.modificationDate: md], ofItemAtPath: url.path) }
     }
 
@@ -131,6 +148,8 @@ final class ClipBrowser: ObservableObject {
     @Published var selected: Item?
     @Published var player = AVPlayer()
     @Published var message = ""
+    /// Protokoll der Drehungen dieser Sitzung (Rückgängig über Einstellungen › Letzte Läufe)
+    private var journal: RunJournal?
 
     func open(folders: [URL]) {
         items = TagRunner.collectVideos(folders).map { Item(url: $0) }
@@ -174,7 +193,14 @@ final class ClipBrowser: ObservableObject {
         }
         player.replaceCurrentItem(with: nil)
         do {
-            try LosslessRotate.rotate(s.url, clockwise: clockwise)
+            if journal == nil { journal = RunJournal(title: "Drehen", bases: []) }
+            let j = journal
+            let url = s.url
+            var planned = 0
+            try LosslessRotate.rotate(url, clockwise: clockwise) { off, old in
+                planned = j?.plan("drehen", url, nil, size: Int64(off), data: old.base64EncodedString()) ?? 0
+            }
+            if planned > 0 { j?.done(planned) }
             message = "\(s.url.lastPathComponent) gedreht – verlustfrei, alle Daten (auch Gyro) bleiben erhalten. „Aktualisieren“ sortiert ihn danach in den passenden Ordner."
         } catch {
             message = "Drehen nicht möglich: \(error.localizedDescription). Die Datei ist unverändert."

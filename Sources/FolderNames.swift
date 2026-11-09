@@ -52,17 +52,17 @@ enum FolderNames {
         return fold(first).range(of: pat, options: .regularExpression) != nil
     }
 
-    // MARK: Bildrate (FPS)
-    /// Schablone für FPS-Ordner, {n} = Bildrate (z. B. „{n} fps“ → „50 fps“) – einstellbar
+    // MARK: Framerate (FPS)
+    /// Schablone für FPS-Ordner, {n} = Framerate (z. B. „{n} fps“ → „50 fps“) – einstellbar
     static var fpsTemplate = "{n} fps"
-    /// Ordner für Clips ohne feste Bildrate (nominalFrameRate 0/unplausibel, z. B. manche Bildschirmaufnahmen)
+    /// Ordner für Clips ohne feste Framerate (nominalFrameRate 0/unplausibel, z. B. manche Bildschirmaufnahmen)
     static var fpsVariable = "Variable fps"
     /// Standardklassen: (Klasse, Werte, die dazu gehören). Enge Toleranz → 23,976/24 nie 25, 48 nie 50, 119,88/120 nie 100.
     static let fpsClasses: [(n: Int, values: [Double])] = [
         (24, [23.976, 24]), (25, [25]), (30, [29.97, 30]), (48, [47.952, 48]), (50, [50]), (60, [59.94, 60]),
         (100, [100]), (120, [119.88, 120]), (200, [200]), (240, [239.76, 240]),
     ]
-    /// Bildrate → Klasse. nil = keine feste/plausible Bildrate (variabel).
+    /// Framerate → Klasse. nil = keine feste/plausible Framerate (variabel).
     static func fpsClass(_ v: Double) -> Int? {
         guard v.isFinite, v >= 1, v <= 1000 else { return nil }
         for c in fpsClasses where c.values.contains(where: { abs($0 - v) <= 0.3 }) { return c.n }
